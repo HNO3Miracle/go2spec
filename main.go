@@ -56,6 +56,6 @@ func main() {
 		// Default to 'pack' command if no command is provided
 		println("No command provided. Defaulting to 'pack' command...")
 		// Actual packing logic would go here
-		mainPack(args, usage)
+		mainPack(args, printHelp)
 	}
 }
