@@ -321,21 +321,23 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 	}
 
 	// Resolve all packages to the root of their repository.
-	roots := make(map[string]bool)
-	for dep := range godependencies {
-		rr, err := vcs.RepoRootForImportPath(dep, false)
-		if err != nil {
-			log.Printf("Could not determine repo path for import path %q: %v\n", dep, err)
-			continue
-		}
+	//roots := make(map[string]bool)
+	//for dep := range godependencies {
+	//	rr, err := vcs.RepoRootForImportPath(dep, false)
+	//	if err != nil {
+	//		log.Printf("Could not determine repo path for import path %q: %v\n", dep, err)
+	//		continue
+	//	}
+	//	roots[rr.Root] = true
+	//}
 
-		roots[rr.Root] = true
-	}
+	//u.repoDeps = make([]string, 0, len(godependencies))
+	//for root := range roots {
+	//	u.repoDeps = append(u.repoDeps, root)
+	//}
 
+	// Sort the dependencies for reproducibility
 	u.repoDeps = make([]string, 0, len(godependencies))
-	for root := range roots {
-		u.repoDeps = append(u.repoDeps, root)
-	}
 
 	return nil
 }
@@ -362,10 +364,6 @@ func makeUpstreamSourceTarball(repo, revision string, forcePrerelease bool) (*up
 	// Verify early this repository uses git (we call pkgVersionFromGit later):
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); os.IsNotExist(err) {
 		return nil, fmt.Errorf("not a git repository; This program currently only supports git")
-	}
-
-	if _, err := os.Stat(filepath.Join(repoDir, "debian")); err == nil {
-		log.Printf("WARNING: ignoring debian/ directory that came with the upstream sources\n")
 	}
 
 	u.vendorDirs, err = findVendorDirs(repoDir)
