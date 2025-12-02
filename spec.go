@@ -125,7 +125,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	case typeLibrary:
 		fmt.Fprintf(f, "# Library package - no build needed\n")
 	case typeProgram, typeLibraryProgram, typeProgramLibrary:
-		fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go\n")
+		fmt.Fprintf(f, "export GO111MODULE=off\n")
+		fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go:%%{_datadir}/gocode\n")
 		fmt.Fprintf(f, "export GOFLAGS=\"-buildmode=pie -trimpath -mod=readonly -modcacherw\"\n")
 		fmt.Fprintf(f, "go build -v -o %%{_name} .\n")
 	}
@@ -152,7 +153,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 
 	// %check
 	fmt.Fprintf(f, "%%check\n")
-	fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go\n")
+	fmt.Fprintf(f, "export GO111MODULE=off\n")
+	fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go:%%{_datadir}/gocode\n")
 	fmt.Fprintf(f, "go test -v ./...\n")
 	fmt.Fprintf(f, "\n")
 
