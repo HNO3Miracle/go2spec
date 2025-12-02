@@ -168,6 +168,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 
 // For library package
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
+	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "Provides:       golang(%s)\n", gopkg)
 	// 库包的运行时依赖
 	if len(deps) > 0 {
