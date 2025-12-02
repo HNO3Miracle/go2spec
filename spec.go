@@ -76,7 +76,6 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	for _, dep := range rpmDeps {
 		fmt.Fprintf(f, "BuildRequires:  %s\n", dep)
 	}
-	fmt.Fprintf(f, "\n")
 
 	// For different package types, write different sections
 	switch pkgType {
