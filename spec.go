@@ -59,7 +59,14 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
 	fmt.Fprintf(f, "URL:            https://github.com/%s/%s\n", owner, repo)
-	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
+	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n\n", owner, repo)
+
+	switch pkgType {
+	case typeLibrary:
+		fmt.Fprintf(f, "BuildArch:      noarch\n")
+		fmt.Fprintf(f, "\n")
+
+	}
 
 	fmt.Fprintf(f, "BuildRequires:  go\n")
 	// And other BuildRequires from dependencies
@@ -96,6 +103,11 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// %prep
 	fmt.Fprintf(f, "%%prep\n")
 	fmt.Fprintf(f, "%%autosetup -n %%{_name}-%%{version}\n")
+	switch pkgType {
+	case typeProgram, typeLibraryProgram, typeProgramLibrary:
+		fmt.Fprintf(f, "mkdir -p %%{_builddir}/go/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "cp -a . %%{_builddir}/go/src/%%{go_import_path}\n")
+	}
 	if len(u.vendorDirs) > 0 {
 		fmt.Fprintf(f, "# Remove bundled dependencies\n")
 		for _, vdir := range u.vendorDirs {
@@ -115,9 +127,6 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	case typeProgram, typeLibraryProgram, typeProgramLibrary:
 		fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go\n")
 		fmt.Fprintf(f, "export GOFLAGS=\"-buildmode=pie -trimpath -mod=readonly -modcacherw\"\n")
-		fmt.Fprintf(f, "export CGO_CFLAGS=\"${CFLAGS:-%%optflags}\"\n")
-		fmt.Fprintf(f, "export CGO_CXXFLAGS=\"${CXXFLAGS:-%%optflags}\"\n")
-		fmt.Fprintf(f, "export CGO_LDFLAGS=\"${LDFLAGS:-%%__global_ldflags}\"\n")
 		fmt.Fprintf(f, "go build -v -o %%{_name} .\n")
 	}
 	fmt.Fprintf(f, "\n")
@@ -128,9 +137,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	case typeLibrary:
 		fmt.Fprintf(f, "# Install source code for library package\n")
 		fmt.Fprintf(f, "install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -pav *. go go. mod go.sum %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/ || :\n")
-		fmt.Fprintf(f, "find .  -mindepth 1 -type d -not -path './.*' -exec install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/{} \\;\n")
-		fmt.Fprintf(f, "find . -type f -name '*.go' -exec install -m 0644 {} %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/{} \\;\n")
+		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
 	case typeProgram:
 		fmt.Fprintf(f, "install -D -m 0755 %%{_name} %%{buildroot}%%{_bindir}/%%{_name}\n")
 	case typeLibraryProgram, typeProgramLibrary:
@@ -139,9 +146,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 		fmt.Fprintf(f, "\n")
 		fmt.Fprintf(f, "# Install source code for library package\n")
 		fmt.Fprintf(f, "install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -pav *.go go.mod go.sum %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/ || :\n")
-		fmt.Fprintf(f, "find . -mindepth 1 -type d -not -path './.*' -exec install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/{} \\;\n")
-		fmt.Fprintf(f, "find . -type f -name '*.go' -exec install -m 0644 {} %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}/{} \\;\n")
+		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
 	}
 	fmt.Fprintf(f, "\n")
 
@@ -156,16 +161,13 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 
 	// %changelog
 	fmt.Fprintf(f, "%%changelog\n")
-	fmt.Fprintf(f, "%%{?autochangelog}\n")
+	fmt.Fprintf(f, "%%{?autochangelog}\n\n")
 
 	return nil
 }
 
 // For library package
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
-	fmt.Fprintf(f, "BuildArch:      noarch\n")
-	fmt.Fprintf(f, "\n")
-
 	// 库包的运行时依赖
 	if len(deps) > 0 {
 		for _, dep := range deps {
@@ -207,28 +209,28 @@ func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram 
 	switch pkgType {
 	case typeLibrary:
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
-		fmt.Fprintf(f, "%%doc README* CHANGELOG* HISTORY*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
+		fmt.Fprintf(f, "%%doc README*\n")
 		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeProgram:
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
-		fmt.Fprintf(f, "%%doc README* CHANGELOG* HISTORY*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
+		fmt.Fprintf(f, "%%doc README*\n")
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeLibraryProgram:
 		// 库包文件（主包）
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
-		fmt.Fprintf(f, "%%doc README* CHANGELOG* HISTORY*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
+		fmt.Fprintf(f, "%%doc README*\n")
 		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 		// 程序子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiProgram)
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 
@@ -308,10 +310,11 @@ func convertDependenciesToRPM(debDeps []string) []string {
 
 	for _, dep := range debDeps {
 		// 转换 golang-xxx-dev 为 golang(xxx)
-		if strings.HasPrefix(dep, "golang-") && strings.HasSuffix(dep, "-devel") {
+		//if strings.HasPrefix(dep, "go-") && strings.HasSuffix(dep, "-devel") {
+		if strings.HasPrefix(dep, "go-") {
 			// golang-github-foo-bar-dev -> golang(github.com/foo/bar)
-			trimmed := strings.TrimPrefix(dep, "golang-")
-			trimmed = strings.TrimSuffix(trimmed, "-devel")
+			trimmed := strings.TrimPrefix(dep, "go-")
+			//trimmed = strings.TrimSuffix(trimmed, "-devel")
 
 			// 尝试还原 Go 包路径
 			parts := strings.Split(trimmed, "-")

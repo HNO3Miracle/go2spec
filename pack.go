@@ -628,7 +628,7 @@ func mainPack(args []string, usage func()) {
 
 	// Set default source and binary package names.
 	openRuyiSrc := nameFromGopkg(gopkg, typeLibrary, customProgPkgName, allowUnknownHoster)
-	openRuyiLib := openRuyiSrc + "-devel"
+	openRuyiLib := openRuyiSrc
 	openRuyiProgram := nameFromGopkg(gopkg, typeProgram, customProgPkgName, allowUnknownHoster)
 
 	var pkgType packageType
@@ -709,7 +709,7 @@ func mainPack(args []string, usage func()) {
 	seen := make(map[string]bool)
 	pkgdependencies := make([]string, 0, len(u.repoDeps))
 	for _, dep := range u.repoDeps {
-		pkgname := nameFromGopkg(dep, typeLibrary, "", allowUnknownHoster) + "-devel"
+		pkgname := nameFromGopkg(dep, typeLibrary, "", allowUnknownHoster)
 		if !seen[pkgname] {
 			seen[pkgname] = true
 			pkgdependencies = append(pkgdependencies, pkgname)
