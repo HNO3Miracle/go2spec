@@ -65,7 +65,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	case typeLibrary:
 		fmt.Fprintf(f, "BuildArch:      noarch\n")
 		fmt.Fprintf(f, "\n")
-
+	case typeProgram, typeLibraryProgram, typeProgramLibrary:
+		fmt.Fprintf(f, "\n")
 	}
 
 	fmt.Fprintf(f, "BuildRequires:  go\n")
@@ -237,13 +238,13 @@ func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram 
 	case typeProgramLibrary:
 		// 程序主包文件
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
-		fmt.Fprintf(f, "%%doc README* CHANGELOG* HISTORY*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
+		fmt.Fprintf(f, "%%doc README*\n")
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 		// 库子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiLib)
-		fmt.Fprintf(f, "%%license LICENSE* COPYING*\n")
+		fmt.Fprintf(f, "%%license LICENSE*\n")
 		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 	}
