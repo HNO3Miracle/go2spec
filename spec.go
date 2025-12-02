@@ -169,7 +169,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 // For library package
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
 	fmt.Fprintf(f, "\n")
-	fmt.Fprintf(f, "Provides:       golang(%s)\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s)\n", gopkg)
 	// 库包的运行时依赖
 	if len(deps) > 0 {
 		for _, dep := range deps {
@@ -184,7 +184,7 @@ func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, long
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "%%package -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "Summary:        Development files of %s\n", filepath.Base(gopkg))
-	fmt.Fprintf(f, "Provides:       golang(%s)\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s)\n", gopkg)
 	fmt.Fprintf(f, "BuildArch:      noarch\n")
 	for _, dep := range deps {
 		fmt.Fprintf(f, "Requires:       %s\n", dep)
@@ -273,7 +273,7 @@ func getKnownHostsReverse() map[string]string {
 	return map[string]string{
 		"bazil":         "bazil.org",
 		"bitbucket":     "bitbucket.org",
-		"blitiri":       "blitiri. com. ar",
+		"blitiri":       "blitiri.com.ar",
 		"googlecloud":   "cloud.google.com",
 		"googlecode":    "code.google.com",
 		"codeberg":      "codeberg.org",
@@ -312,10 +312,10 @@ func convertDependenciesToRPM(debDeps []string) []string {
 	var rpmDeps []string
 
 	for _, dep := range debDeps {
-		// 转换 golang-xxx-dev 为 golang(xxx)
+		// 转换 golang-xxx-dev 为 go(xxx)
 		//if strings.HasPrefix(dep, "go-") && strings.HasSuffix(dep, "-devel") {
 		if strings.HasPrefix(dep, "go-") {
-			// golang-github-foo-bar-dev -> golang(github.com/foo/bar)
+			// golang-github-foo-bar-dev -> go(github.com/foo/bar)
 			trimmed := strings.TrimPrefix(dep, "go-")
 			//trimmed = strings.TrimSuffix(trimmed, "-devel")
 
@@ -335,9 +335,9 @@ func convertDependenciesToRPM(debDeps []string) []string {
 				}
 
 				importPath := fullHost + "/" + strings.Join(parts[1:], "/")
-				rpmDeps = append(rpmDeps, fmt.Sprintf("golang(%s)", importPath))
+				rpmDeps = append(rpmDeps, fmt.Sprintf("go(%s)", importPath))
 			} else {
-				rpmDeps = append(rpmDeps, fmt.Sprintf("golang(%s)", trimmed))
+				rpmDeps = append(rpmDeps, fmt.Sprintf("go(%s)", trimmed))
 			}
 		} else {
 			rpmDeps = append(rpmDeps, dep)

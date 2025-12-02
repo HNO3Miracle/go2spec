@@ -595,7 +595,7 @@ func mainPack(args []string, usage func()) {
 		false,
 		"The pkg-go naming conventions use a canonical identifier for\n"+
 			"the hostname (see https://go-team.pages.debian.net/packaging.html),\n"+
-			"and the mapping is hardcoded into dh-make-golang.\n"+
+			"and the mapping is hardcoded into this program.\n"+
 			"In case you want to package a Go package living on an unknown hoster,\n"+
 			"you may set this flag to true and double-check that the resulting\n"+
 			"package name is sane. Contact pkg-go if unsure.")
