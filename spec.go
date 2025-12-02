@@ -55,11 +55,11 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// Header
 	fmt.Fprintf(f, "Name:           %s\n", openRuyiSrc)
 	fmt.Fprintf(f, "Version:        %s\n", version)
-	fmt.Fprintf(f, "Release:        %autorelease\n")
+	fmt.Fprintf(f, "Release:        %%autorelease\n")
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
 	fmt.Fprintf(f, "URL:            https://github.com/%s/%s\n", owner, repo)
-	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar. gz\n", owner, repo)
+	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
 
 	fmt.Fprintf(f, "BuildRequires:  go\n")
 	// And other BuildRequires from dependencies
@@ -74,7 +74,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	switch pkgType {
 	case typeLibrary:
 		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmDeps)
-	//case typeProgram:
+	case typeProgram:
+		log.Printf("Nothing to do for program package.\n")
 	// TODO: what can this be used for? ExclusiveArch %%{go_arches}?
 	//	writeRPMProgramPackage(f, gopkg, openRuyiProgram, longdescription)
 	case typeLibraryProgram:
@@ -307,10 +308,10 @@ func convertDependenciesToRPM(debDeps []string) []string {
 
 	for _, dep := range debDeps {
 		// 转换 golang-xxx-dev 为 golang(xxx)
-		if strings.HasPrefix(dep, "golang-") && strings.HasSuffix(dep, "-dev") {
+		if strings.HasPrefix(dep, "golang-") && strings.HasSuffix(dep, "-devel") {
 			// golang-github-foo-bar-dev -> golang(github.com/foo/bar)
 			trimmed := strings.TrimPrefix(dep, "golang-")
-			trimmed = strings.TrimSuffix(trimmed, "-dev")
+			trimmed = strings.TrimSuffix(trimmed, "-devel")
 
 			// 尝试还原 Go 包路径
 			parts := strings.Split(trimmed, "-")

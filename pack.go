@@ -709,7 +709,7 @@ func mainPack(args []string, usage func()) {
 	seen := make(map[string]bool)
 	pkgdependencies := make([]string, 0, len(u.repoDeps))
 	for _, dep := range u.repoDeps {
-		pkgname := nameFromGopkg(dep, typeLibrary, "", allowUnknownHoster) + "-dev"
+		pkgname := nameFromGopkg(dep, typeLibrary, "", allowUnknownHoster) + "-devel"
 		if !seen[pkgname] {
 			seen[pkgname] = true
 			pkgdependencies = append(pkgdependencies, pkgname)
