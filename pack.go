@@ -336,8 +336,11 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 	//	u.repoDeps = append(u.repoDeps, root)
 	//}
 
-	// Sort the dependencies for reproducibility
+	// Alternatively, just list all import paths as dependencies.
 	u.repoDeps = make([]string, 0, len(godependencies))
+	for dep := range godependencies {
+		u.repoDeps = append(u.repoDeps, dep)
+	}
 
 	return nil
 }
