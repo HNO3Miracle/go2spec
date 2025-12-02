@@ -168,6 +168,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 
 // For library package
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
+	fmt.Fprintf(f, "Provides:       golang(%s)\n", gopkg)
 	// 库包的运行时依赖
 	if len(deps) > 0 {
 		for _, dep := range deps {
@@ -182,6 +183,7 @@ func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, long
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "%%package -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "Summary:        Development files of %s\n", filepath.Base(gopkg))
+	fmt.Fprintf(f, "Provides:       golang(%s)\n", gopkg)
 	fmt.Fprintf(f, "BuildArch:      noarch\n")
 	for _, dep := range deps {
 		fmt.Fprintf(f, "Requires:       %s\n", dep)
