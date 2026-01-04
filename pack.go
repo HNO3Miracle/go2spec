@@ -497,6 +497,12 @@ func shortHostName(gopkg string, allowUnknownHoster bool) (host string, err erro
 		return "", fmt.Errorf("unknown hoster %q", fqdn)
 	}
 	suffix, _ := publicsuffix.PublicSuffix(fqdn)
+	// 防止 panic: runtime error: slice bounds out of range [:-1]
+	// 如果 fqdn 长度不足以包含 suffix 和一个点号（例如 "localhost" 或 "yaml"），则直接使用 fqdn
+	if len(fqdn) <= len(suffix)+len(".") {
+		log.Printf("WARNING: Cannot strip suffix %q from %q (too short), using %q as hostname.", suffix, fqdn, fqdn)
+		return fqdn, nil
+	}
 	host = fqdn[:len(fqdn)-len(suffix)-len(".")]
 	log.Printf("WARNING: Using %q as canonical hostname for %q. If that is not okay, please file a bug against %s.\n", host, fqdn, os.Args[0])
 	return host, nil
