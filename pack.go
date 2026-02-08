@@ -676,6 +676,24 @@ func mainPack(args []string, usage func()) {
 			gopkg, strings.ToLower(gopkg))
 	}
 
+	info, err := os.Stat(openRuyiSrc)
+	if err == nil {
+		if !info.IsDir() {
+			log.Fatalf("%q exists but is not a directory\n", openRuyiSrc)
+		}
+
+		entries, err := os.ReadDir(openRuyiSrc)
+		if err != nil {
+			log.Fatalf("Failed to read directory %q: %v\n", openRuyiSrc, err)
+		}
+
+		if len(entries) != 0 {
+			log.Fatalf("Output directory %q exists and is non-empty, aborting\n", openRuyiSrc)
+		}
+	} else if !os.IsNotExist(err) {
+		log.Fatalf("Failed to stat %q: %v\n", openRuyiSrc, err)
+	}
+
 	// Create a tarball of the upstream source
 	u, err := makeUpstreamSourceTarball(gopkg, gitRevision, forcePrerelease)
 	if err != nil {
@@ -690,10 +708,6 @@ func mainPack(args []string, usage func()) {
 		} else {
 			pkgType = typeLibrary
 		}
-	}
-
-	if _, err := os.Stat(openRuyiSrc); err == nil {
-		log.Fatalf("Output directory %q already exists, aborting\n", openRuyiSrc)
 	}
 
 	orig := fmt.Sprintf("%s_%s.orig.tar.%s", openRuyiSrc, u.version, u.compression)
