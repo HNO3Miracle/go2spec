@@ -111,64 +111,6 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "%s\n", longdescription)
 	fmt.Fprintf(f, "\n")
 
-	// %prep
-	fmt.Fprintf(f, "%%prep\n")
-	fmt.Fprintf(f, "%%autosetup -n %%{_name}-%%{version}\n")
-	switch pkgType {
-	case typeProgram, typeLibraryProgram, typeProgramLibrary:
-		fmt.Fprintf(f, "mkdir -p %%{_builddir}/go/src/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -a . %%{_builddir}/go/src/%%{go_import_path}\n")
-	}
-	if len(u.vendorDirs) > 0 {
-		fmt.Fprintf(f, "# Remove bundled dependencies\n")
-		for _, vdir := range u.vendorDirs {
-			fmt.Fprintf(f, "rm -rf %s\n", vdir)
-		}
-	}
-	if u.hasGodeps {
-		fmt.Fprintf(f, "rm -rf Godeps/_workspace\n")
-	}
-	fmt.Fprintf(f, "\n")
-
-	// %build
-	fmt.Fprintf(f, "%%build\n")
-	switch pkgType {
-	case typeLibrary:
-		fmt.Fprintf(f, "# Library package - no build needed\n")
-	case typeProgram, typeLibraryProgram, typeProgramLibrary:
-		fmt.Fprintf(f, "export GO111MODULE=off\n")
-		fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go:%%{_datadir}/gocode\n")
-		fmt.Fprintf(f, "export GOFLAGS=\"-buildmode=pie -trimpath -mod=readonly -modcacherw\"\n")
-		fmt.Fprintf(f, "go build -v -o %%{_name} .\n")
-	}
-	fmt.Fprintf(f, "\n")
-
-	// %install
-	fmt.Fprintf(f, "%%install\n")
-	switch pkgType {
-	case typeLibrary:
-		fmt.Fprintf(f, "# Install source code for library package\n")
-		fmt.Fprintf(f, "install -d %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
-	case typeProgram:
-		fmt.Fprintf(f, "install -D -m 0755 %%{_name} %%{buildroot}%%{_bindir}/%%{_name}\n")
-	case typeLibraryProgram, typeProgramLibrary:
-		fmt.Fprintf(f, "# Install binary\n")
-		fmt.Fprintf(f, "install -D -m 0755 %%{_name} %%{buildroot}%%{_bindir}/%%{_name}\n")
-		fmt.Fprintf(f, "\n")
-		fmt.Fprintf(f, "# Install source code for library package\n")
-		fmt.Fprintf(f, "install -d %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
-	}
-	fmt.Fprintf(f, "\n")
-
-	// %check
-	fmt.Fprintf(f, "%%check\n")
-	fmt.Fprintf(f, "export GO111MODULE=off\n")
-	fmt.Fprintf(f, "export GOPATH=%%{_builddir}/go:%%{_datadir}/gocode\n")
-	fmt.Fprintf(f, "go test -v ./...\n")
-	fmt.Fprintf(f, "\n")
-
 	// %files
 	writeRPMFilesSection(f, openRuyiSrc, openRuyiLib, openRuyiProgram, pkgType)
 
