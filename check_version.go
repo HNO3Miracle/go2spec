@@ -153,6 +153,16 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 		lastCommitHash = string(submatches[1])
 		u.commitIsh = strings.TrimSpace(string(describeBytes))
 	}
+
+	// Fetch full commit hash
+	cmd = exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = gitdir
+	fullCommitHashBytes, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	fullCommitHash := strings.TrimSpace(string(fullCommitHashBytes))
+
 	u.version = fmt.Sprintf("%sgit%s.%s",
 		mainVer,
 		time.Unix(lastCommitUnix, 0).UTC().Format("20060102"),
@@ -162,8 +172,8 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 		// have tag: 1.2.3.20250101+git9f107c8
 		u.version = fmt.Sprintf("%s.%s+git%s", u.version, dateStr, lastCommitHash)
 	} else {
-		// without tag: 20250101+git9f107c8
-		u.version = fmt.Sprintf("%s+git%s", dateStr, lastCommitHash)
+		// without tag: 0.git20250101.96ee002 96ee0021ea0fb9174681b8004d8deba3c499d7f5
+		u.version = fmt.Sprintf("0.git%s.%s\n%%define commit_id %s", dateStr, lastCommitHash, fullCommitHash)
 	}
 	return u.version, nil
 }
