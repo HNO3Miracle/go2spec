@@ -47,6 +47,14 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 
 	// Write the spec file content
 
+	// SPDX header
+	fmt.Fprintf(f, "# SPDX-FileCopyrightText: (C) 2026 Institute of Software, Chinese Academy of Sciences (ISCAS)\n")
+	fmt.Fprintf(f, "# SPDX-FileCopyrightText: (C) 2026 openRuyi Project Contributors\n")
+	fmt.Fprintf(f, "# SPDX-FileContributor: \n")
+	fmt.Fprintf(f, "#\n")
+	fmt.Fprintf(f, "# SPDX-License-Identifier: MulanPSL-2.0\n")
+	fmt.Fprintf(f, "\n")
+
 	// Macros
 	fmt.Fprintf(f, "%%define _name           %s\n", upstreamName)
 	fmt.Fprintf(f, "%%define go_import_path  %s\n", gopkg)
@@ -59,17 +67,20 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
 	fmt.Fprintf(f, "URL:            https://github.com/%s/%s\n", owner, repo)
+	fmt.Fprintf(f, "#!RemoteAsset\n")
 	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
 
 	switch pkgType {
 	case typeLibrary:
 		fmt.Fprintf(f, "BuildArch:      noarch\n")
+		fmt.Fprintf(f, "BuildSystem:    golangmodules\n")
 		fmt.Fprintf(f, "\n")
 	case typeProgram, typeLibraryProgram, typeProgramLibrary:
 		fmt.Fprintf(f, "\n")
 	}
 
 	fmt.Fprintf(f, "BuildRequires:  go\n")
+	fmt.Fprintf(f, "BuildRequires:  go-rpm-macros\n")
 	// And other BuildRequires from dependencies
 	rpmDeps := convertDependenciesToRPM(dependencies)
 	sort.Strings(rpmDeps)
@@ -137,8 +148,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	switch pkgType {
 	case typeLibrary:
 		fmt.Fprintf(f, "# Install source code for library package\n")
-		fmt.Fprintf(f, "install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "install -d %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
+		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
 	case typeProgram:
 		fmt.Fprintf(f, "install -D -m 0755 %%{_name} %%{buildroot}%%{_bindir}/%%{_name}\n")
 	case typeLibraryProgram, typeProgramLibrary:
@@ -146,8 +157,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 		fmt.Fprintf(f, "install -D -m 0755 %%{_name} %%{buildroot}%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 		fmt.Fprintf(f, "# Install source code for library package\n")
-		fmt.Fprintf(f, "install -d %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
-		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{_datadir}/gocode/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "install -d %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
+		fmt.Fprintf(f, "cp -a . %%{buildroot}%%{go_sys_gopath}/%%{go_import_path}\n")
 	}
 	fmt.Fprintf(f, "\n")
 
@@ -171,7 +182,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 // For library package
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
 	fmt.Fprintf(f, "\n")
-	fmt.Fprintf(f, "Provides:       go(%s)\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
 	// 库包的运行时依赖
 	if len(deps) > 0 {
 		for _, dep := range deps {
@@ -186,7 +197,7 @@ func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, long
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "%%package -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "Summary:        Development files of %s\n", filepath.Base(gopkg))
-	fmt.Fprintf(f, "Provides:       go(%s)\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
 	fmt.Fprintf(f, "BuildArch:      noarch\n")
 	for _, dep := range deps {
 		fmt.Fprintf(f, "Requires:       %s\n", dep)
@@ -216,7 +227,7 @@ func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram 
 		fmt.Fprintf(f, "%%files\n")
 		fmt.Fprintf(f, "%%license LICENSE*\n")
 		fmt.Fprintf(f, "%%doc README*\n")
-		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeProgram:
@@ -231,7 +242,7 @@ func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram 
 		fmt.Fprintf(f, "%%files\n")
 		fmt.Fprintf(f, "%%license LICENSE*\n")
 		fmt.Fprintf(f, "%%doc README*\n")
-		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 		// 程序子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiProgram)
@@ -249,7 +260,7 @@ func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram 
 		// 库子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiLib)
 		fmt.Fprintf(f, "%%license LICENSE*\n")
-		fmt.Fprintf(f, "%%{_datadir}/gocode/src/%%{go_import_path}\n")
+		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 	}
 }
