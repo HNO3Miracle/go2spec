@@ -82,7 +82,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "BuildRequires:  go\n")
 	fmt.Fprintf(f, "BuildRequires:  go-rpm-macros\n")
 	// And other BuildRequires from dependencies
-	rpmDeps := convertDependenciesToRPM(dependencies)
+	rpmDeps := convertDependenciesToRPM(u.repoDeps)
 	sort.Strings(rpmDeps)
 	for _, dep := range rpmDeps {
 		fmt.Fprintf(f, "BuildRequires:  %s\n", dep)
@@ -223,80 +223,38 @@ func convertLongDescriptionForRPM(openRuyiSrc string) string {
 	return strings.Join(result, "\n")
 }
 
-// Sync with shortHostName() from pack.go
-func getKnownHostsReverse() map[string]string {
-	return map[string]string{
-		"bazil":         "bazil.org",
-		"bitbucket":     "bitbucket.org",
-		"blitiri":       "blitiri.com.ar",
-		"googlecloud":   "cloud.google.com",
-		"googlecode":    "code.google.com",
-		"codeberg":      "codeberg.org",
-		"filippo":       "filippo.io",
-		"fortio":        "fortio.org",
-		"fyne":          "fyne.io",
-		"sourcehut":     "git.sr.ht",
-		"github":        "github.com",
-		"gitlab":        "gitlab.com",
-		"bugst":         "go.bug.st",
-		"cypherpunks":   "go.cypherpunks.ru",
-		"mongodb":       "go.mongodb.org",
-		"opentelemetry": "go.opentelemetry.io",
-		"step":          "go.step.sm",
-		"uber":          "go.uber.org",
-		"go4":           "go4.org",
-		"gocloud":       "gocloud.dev",
-		"golang":        "golang.org",
-		"google":        "google.golang.org",
-		"gopkg":         "gopkg.in",
-		"honnef":        "honnef. co",
-		"howett":        "howett.net",
-		"k8s":           "k8s.io",
-		"modernc":       "modernc.org",
-		"pault":         "pault.ag",
-		"rsc":           "rsc.io",
-		"debian":        "salsa.debian.org",
-		"k8s-sigs":      "sigs.k8s.io",
-		"sslmate":       "software.sslmate.com",
-		"zgoat":         "zgo.at",
-	}
-}
+func convertDependenciesToRPM(goPkgs []string) []string {
+	// 使用 map 来去重和提取顶级包路径
+	topLevelPkgs := make(map[string]bool)
 
-func convertDependenciesToRPM(debDeps []string) []string {
-	knownHostsReverse := getKnownHostsReverse()
-	var rpmDeps []string
+	for _, goPkg := range goPkgs {
+		// 提取顶级包：github.com/user/repo/subpkg -> github.com/user/repo
+		parts := strings.Split(goPkg, "/")
+		var topLevel string
 
-	for _, dep := range debDeps {
-		// 转换 golang-xxx-dev 为 go(xxx)
-		//if strings.HasPrefix(dep, "go-") && strings.HasSuffix(dep, "-devel") {
-		if strings.HasPrefix(dep, "go-") {
-			// golang-github-foo-bar-dev -> go(github.com/foo/bar)
-			trimmed := strings.TrimPrefix(dep, "go-")
-			//trimmed = strings.TrimSuffix(trimmed, "-devel")
+		if len(parts) >= 3 {
+			// 对于大多数情况（github.com/user/repo/...），只取前三部分
+			topLevel = strings.Join(parts[:3], "/")
 
-			// 尝试还原 Go 包路径
-			parts := strings.Split(trimmed, "-")
-			if len(parts) >= 2 {
-				shortHost := parts[0]
-
-				// 使用 knownHosts 反向映射查找完整主机名
-				var fullHost string
-				if fqdn, ok := knownHostsReverse[shortHost]; ok {
-					fullHost = fqdn
-				} else {
-					// 未知主机，保持原样（可能是自定义域名）
-					fullHost = shortHost
-					log.Printf("WARNING: Unknown host shortname %q in dependency %q\n", shortHost, dep)
-				}
-
-				importPath := fullHost + "/" + strings.Join(parts[1:], "/")
-				rpmDeps = append(rpmDeps, fmt.Sprintf("go(%s)", importPath))
-			} else {
-				rpmDeps = append(rpmDeps, fmt.Sprintf("go(%s)", trimmed))
+			// 例外情况：如果第四部分以 'v' 开头（版本号），则保留第四部分
+			// 例如：github.com/minio/madmin-go/v3 -> github.com/minio/madmin-go/v3
+			if len(parts) >= 4 && strings.HasPrefix(parts[3], "v") {
+				topLevel = strings.Join(parts[:4], "/")
 			}
-		} else {
-			rpmDeps = append(rpmDeps, dep)
+		} else if len(parts) > 0 {
+			// 如果路径部分少于 3 个，保留整个路径
+			topLevel = goPkg
 		}
+
+		topLevelPkgs[topLevel] = true
 	}
+
+	// 转换为 RPM 格式并排序
+	var rpmDeps []string
+	for pkg := range topLevelPkgs {
+		rpmDeps = append(rpmDeps, fmt.Sprintf("go(%s)", pkg))
+	}
+	sort.Strings(rpmDeps)
+
 	return rpmDeps
 }

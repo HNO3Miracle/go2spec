@@ -623,6 +623,9 @@ func mainPack(args []string, usage func()) {
 	gitRevision = strings.TrimSpace(gitRevision)
 	gopkg := flagSet.Arg(0)
 
+	// Remove URL scheme if present (https://, http://, git://, etc.)
+	gopkg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(gopkg, "https://"), "http://"), "git://")
+
 	// Verify that the provided argument is a valid Go package import path
 	rr, err := vcs.RepoRootForImportPath(gopkg, false)
 	if err != nil {
