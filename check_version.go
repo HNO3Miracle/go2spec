@@ -173,7 +173,7 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 		u.version = fmt.Sprintf("%s.%s+git%s", u.version, dateStr, lastCommitHash)
 	} else {
 		// without tag: 0.git20250101.96ee002 96ee0021ea0fb9174681b8004d8deba3c499d7f5
-		u.version = fmt.Sprintf("0.git%s.%s\n%%define commit_id %s", dateStr, lastCommitHash, fullCommitHash)
+		u.version = fmt.Sprintf("0+git%s.%s\n%%define commit_id %s", dateStr, lastCommitHash, fullCommitHash)
 	}
 	return u.version, nil
 }

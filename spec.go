@@ -58,17 +58,40 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// Macros
 	fmt.Fprintf(f, "%%define _name           %s\n", upstreamName)
 	fmt.Fprintf(f, "%%define go_import_path  %s\n", gopkg)
+
+	// If pkgVersionFromGit embedded a commit_id define in u.version, extract and write it here
+	commitRe := regexp.MustCompile(`%define\s+commit_id\s+([0-9a-fA-F]+)`)
+	if m := commitRe.FindStringSubmatch(u.version); m != nil {
+		fmt.Fprintf(f, "%%define commit_id %s\n", m[1])
+		// Remove the embedded %define line from version so it doesn't get written to Version: field
+		version = commitRe.ReplaceAllString(version, "")
+		version = strings.TrimSpace(version)
+	}
 	fmt.Fprintf(f, "\n")
 
 	// Header
 	fmt.Fprintf(f, "Name:           %s\n", openRuyiSrc)
+
+	// Some times typeLibrary is treat as typeProgram, 
+	// So we add an additional Name line, and keep one of those mannually
+	switch pkgType {
+	case typeProgram:
+		fmt.Fprintf(f, "Name:           %s\n", openRuyiLib)
+	}
+
 	fmt.Fprintf(f, "Version:        %s\n", version)
 	fmt.Fprintf(f, "Release:        %%autorelease\n")
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
 	fmt.Fprintf(f, "URL:            https://github.com/%s/%s\n", owner, repo)
 	fmt.Fprintf(f, "#!RemoteAsset\n")
-	fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
+	// If the computed version text contains a commit_id definition (see pkgVersionFromGit),
+	// use the commit_id tarball instead of v%{version}.tar.gz
+	if strings.Contains(u.version, "commit_id") {
+		fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/%%{commit_id}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
+	} else {
+		fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
+	}
 
 	switch pkgType {
 	case typeLibrary:
@@ -125,6 +148,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
+	fmt.Fprintf(f, "\n")
 	// 库包的运行时依赖
 	if len(deps) > 0 {
 		for _, dep := range deps {
@@ -141,10 +165,13 @@ func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, long
 	fmt.Fprintf(f, "Summary:        Development files of %s\n", filepath.Base(gopkg))
 	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
 	fmt.Fprintf(f, "BuildArch:      noarch\n")
-	for _, dep := range deps {
-		fmt.Fprintf(f, "Requires:       %s\n", dep)
+	if len(deps) > 0 {
+		for _, dep := range deps {
+			fmt.Fprintf(f, "Requires:       %s\n", dep)
+		}
+	} else {
+		fmt.Fprintf(f, "\n")
 	}
-	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "%%description -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "%s\n", longdesc)
 	fmt.Fprintf(f, "\n")
