@@ -417,8 +417,14 @@ func createDirectory(openRuyiSrc string) (string, error) {
 		return "", fmt.Errorf("get cwd: %w", err)
 	}
 	dir := filepath.Join(wd, openRuyiSrc)
-	if err := os.Mkdir(dir, 0755); err != nil {
-		return "", fmt.Errorf("mkdir: %w", err)
+
+	// Try to create the directory
+	err = os.Mkdir(dir, 0755)
+	if err != nil {
+		// If directory already exists, that's ok (it was verified to be empty)
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("mkdir: %w", err)
+		}
 	}
 	return dir, nil
 }
@@ -663,9 +669,6 @@ func mainPack(args []string, usage func()) {
 
 	if pkgType != typeGuess {
 		openRuyiSrc = nameFromGopkg(gopkg, pkgType, customProgPkgName, allowUnknownHoster)
-		if _, err := os.Stat(openRuyiSrc); err == nil {
-			log.Fatalf("Output directory %q already exists, aborting\n", openRuyiSrc)
-		}
 	}
 
 	if strings.ToLower(gopkg) != gopkg {
@@ -679,23 +682,7 @@ func mainPack(args []string, usage func()) {
 			gopkg, strings.ToLower(gopkg))
 	}
 
-	info, err := os.Stat(openRuyiSrc)
-	if err == nil {
-		if !info.IsDir() {
-			log.Fatalf("%q exists but is not a directory\n", openRuyiSrc)
-		}
-
-		entries, err := os.ReadDir(openRuyiSrc)
-		if err != nil {
-			log.Fatalf("Failed to read directory %q: %v\n", openRuyiSrc, err)
-		}
-
-		if len(entries) != 0 {
-			log.Fatalf("Output directory %q exists and is non-empty, aborting\n", openRuyiSrc)
-		}
-	} else if !os.IsNotExist(err) {
-		log.Fatalf("Failed to stat %q: %v\n", openRuyiSrc, err)
-	}
+	// NOTE: directory existence is checked after determining final openRuyiSrc
 
 	// Create a tarball of the upstream source
 	u, err := makeUpstreamSourceTarball(gopkg, gitRevision, forcePrerelease)
@@ -711,6 +698,23 @@ func mainPack(args []string, usage func()) {
 		} else {
 			pkgType = typeLibrary
 		}
+	}
+
+	// Now that we know the final package name, check output directory
+	info, err := os.Stat(openRuyiSrc)
+	if err == nil {
+		if !info.IsDir() {
+			log.Fatalf("%q exists but is not a directory\n", openRuyiSrc)
+		}
+		entries, err := os.ReadDir(openRuyiSrc)
+		if err != nil {
+			log.Fatalf("Failed to read directory %q: %v\n", openRuyiSrc, err)
+		}
+		if len(entries) != 0 {
+			log.Fatalf("Output directory %q exists and is non-empty, aborting\n", openRuyiSrc)
+		}
+	} else if !os.IsNotExist(err) {
+		log.Fatalf("Failed to stat %q: %v\n", openRuyiSrc, err)
 	}
 
 	orig := fmt.Sprintf("%s_%s.orig.tar.%s", openRuyiSrc, u.version, u.compression)
