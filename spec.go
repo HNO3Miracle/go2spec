@@ -11,7 +11,7 @@ import (
 )
 
 func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version string,
-	pkgType packageType, dependencies []string, u *upstream) error {
+	pkgType packageType, u *upstream) error {
 
 	f, err := os.Create(filepath.Join(dir, "", openRuyiSrc+".spec"))
 	if err != nil {
@@ -105,26 +105,28 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "BuildRequires:  go\n")
 	fmt.Fprintf(f, "BuildRequires:  go-rpm-macros\n")
 	// And other BuildRequires from dependencies
-	rpmDeps := convertDependenciesToRPM(u.repoDeps)
-	sort.Strings(rpmDeps)
-	for _, dep := range rpmDeps {
+	rpmBuildDeps := convertDependenciesToRPM(u.repoDeps)
+	sort.Strings(rpmBuildDeps)
+	for _, dep := range rpmBuildDeps {
 		fmt.Fprintf(f, "BuildRequires:  %s\n", dep)
 	}
+	rpmRuntimeDeps := convertDependenciesToRPM(u.repoRunDeps)
+	sort.Strings(rpmRuntimeDeps)
 
 	// For different package types, write different sections
 	switch pkgType {
 	case typeLibrary:
-		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmDeps)
+		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmRuntimeDeps)
 	case typeProgram:
 		log.Printf("Nothing to do for program package.\n")
 	// TODO: what can this be used for? ExclusiveArch %%{go_arches}?
 	//	writeRPMProgramPackage(f, gopkg, openRuyiProgram, longdescription)
 	case typeLibraryProgram:
-		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmDeps)
+		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmRuntimeDeps)
 		writeRPMProgramSubpackage(f, gopkg, openRuyiProgram, openRuyiSrc, description)
 	case typeProgramLibrary:
 		//writeRPMProgramPackage(f, gopkg, openRuyiProgram, longdescription)
-		writeRPMLibrarySubpackage(f, gopkg, openRuyiLib, openRuyiSrc, longdescription, rpmDeps)
+		writeRPMLibrarySubpackage(f, gopkg, openRuyiLib, openRuyiSrc, longdescription, rpmRuntimeDeps)
 	default:
 		log.Fatalf("Invalid pkgType %d in writeRPMSpec(), aborting", pkgType)
 	}

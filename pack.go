@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
@@ -29,19 +31,21 @@ const (
 
 // upstream describes the upstream repo we are about to package.
 type upstream struct {
-	rr          *vcs.RepoRoot
-	tarPath     string   // path to the downloaded or generated orig tarball tempfile
-	compression string   // compression method, either "gz" or "xz"
-	version     string   // upstream version number, e.g. 0.0~git20180204.1d24609
-	tag         string   // Latest upstream tag, if any
-	commitIsh   string   // commit-ish corresponding to upstream version to be packaged
-	remote      string   // git remote, set to short hostname if upstream git history is included
-	firstMain   string   // import path of the first main package within repo, if any
-	vendorDirs  []string // all vendor sub directories, relative to the repo directory
-	repoDeps    []string // the repository paths of all dependencies (e.g. github.com/zyedidia/glob)
-	hasGodeps   bool     // whether the Godeps/_workspace directory exists
-	hasRelease  bool     // whether any release tags exist, for debian/watch
-	isRelease   bool     // whether what we end up packaging is a tagged release
+	rr           *vcs.RepoRoot
+	tarPath      string   // path to the downloaded or generated orig tarball tempfile
+	compression  string   // compression method, either "gz" or "xz"
+	version      string   // upstream version number, e.g. 0.0~git20180204.1d24609
+	tag          string   // Latest upstream tag, if any
+	commitIsh    string   // commit-ish corresponding to upstream version to be packaged
+	remote       string   // git remote, set to short hostname if upstream git history is included
+	firstMain    string   // import path of the first main package within repo, if any
+	vendorDirs   []string // all vendor sub directories, relative to the repo directory
+	repoDeps     []string // all non-stdlib imports needed for build or tests
+	repoRunDeps  []string // non-stdlib imports needed by normal builds, excluding test-only imports
+	repoTestDeps []string // non-stdlib imports needed only by tests
+	hasGodeps    bool     // whether the Godeps/_workspace directory exists
+	hasRelease   bool     // whether any release tags exist, for debian/watch
+	isRelease    bool     // whether what we end up packaging is a tagged release
 }
 
 var errUnsupportedHoster = errors.New("unsupported hoster")
@@ -263,10 +267,69 @@ func (u *upstream) findMains(gopath, repo string) error {
 	return nil
 }
 
+type goListPackage struct {
+	ImportPath   string
+	Imports      []string
+	TestImports  []string
+	XTestImports []string
+	Error        *goListPackageError
+}
+
+type goListPackageError struct {
+	Err string
+}
+
+func addGoDependencies(deps map[string]bool, repo string, imports []string) {
+	for _, p := range imports {
+		if p == "" {
+			continue
+		}
+		// Strip packages that are included in the repository we are packaging.
+		if strings.HasPrefix(p, repo+"/") || p == repo {
+			continue
+		}
+		if p == "C" {
+			// TODO: maybe parse the comments to figure out C deps from pkg-config files?
+			continue
+		}
+		deps[p] = true
+	}
+}
+
+func sortedDependencySet(deps map[string]bool) []string {
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// setRepoDependencies stores three views of imports: repoDeps is the union for
+// BuildRequires, repoRunDeps is non-test imports for library Requires, and
+// repoTestDeps is imports used only by tests.
+func (u *upstream) setRepoDependencies(runtimeDeps, testDeps map[string]bool) {
+	buildDeps := make(map[string]bool, len(runtimeDeps)+len(testDeps))
+	for dep := range runtimeDeps {
+		buildDeps[dep] = true
+	}
+	testOnlyDeps := make(map[string]bool)
+	for dep := range testDeps {
+		buildDeps[dep] = true
+		if !runtimeDeps[dep] {
+			testOnlyDeps[dep] = true
+		}
+	}
+
+	u.repoDeps = sortedDependencySet(buildDeps)
+	u.repoRunDeps = sortedDependencySet(runtimeDeps)
+	u.repoTestDeps = sortedDependencySet(testOnlyDeps)
+}
+
 func (u *upstream) findDependencies(gopath, repo string) error {
 	log.Printf("Determining dependencies\n")
 
-	cmd := exec.Command("go", "list", "-e", "-f", "{{join .Imports \"\\n\"}}\n{{join .TestImports \"\\n\"}}\n{{join .XTestImports \"\\n\"}}", repo+"/...")
+	cmd := exec.Command("go", "list", "-e", "-json", repo+"/...")
 	cmd.Dir = filepath.Join(gopath, "src", repo)
 	cmd.Env = passthroughEnv()
 	cmd.Stderr = os.Stderr
@@ -276,33 +339,37 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 		log.Println("WARNING: In findDependencies:", fmt.Errorf("%q: %w", cmd.Args, err))
 		// See https://bugs.debian.org/992610
 		log.Printf("Retrying without appending \"/...\" to repo")
-		cmd = exec.Command("go", "list", "-e", "-f", "{{join .Imports \"\\n\"}}\n{{join .TestImports \"\\n\"}}\n{{join .XTestImports \"\\n\"}}", repo)
+		cmd = exec.Command("go", "list", "-e", "-json", repo)
 		cmd.Dir = filepath.Join(gopath, "src", repo)
 		cmd.Env = passthroughEnv()
 		cmd.Stderr = os.Stderr
 		out, err = cmd.Output()
 		if err != nil {
-			log.Println("WARNING: In findDependencies:", fmt.Errorf("%q: %w", cmd.Args, err))
+			return fmt.Errorf("go list dependencies: %q: %w", cmd.Args, err)
 		}
 	}
 
-	godependencies := make(map[string]bool)
-	for _, p := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if p == "" {
-			continue // skip separators between import types
+	runtimeDeps := make(map[string]bool)
+	testDeps := make(map[string]bool)
+	dec := json.NewDecoder(strings.NewReader(string(out)))
+	for {
+		var pkg goListPackage
+		err := dec.Decode(&pkg)
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		// Strip packages that are included in the repository we are packaging.
-		if strings.HasPrefix(p, repo+"/") || p == repo {
-			continue
+		if err != nil {
+			return fmt.Errorf("decode go list dependency output: %w", err)
 		}
-		if p == "C" {
-			// TODO: maybe parse the comments to figure out C deps from pkg-config files?
-		} else {
-			godependencies[p] = true
+		if pkg.Error != nil && pkg.Error.Err != "" {
+			log.Printf("WARNING: go list reported package load error for %q: %s\n", pkg.ImportPath, pkg.Error.Err)
 		}
+		addGoDependencies(runtimeDeps, repo, pkg.Imports)
+		addGoDependencies(testDeps, repo, pkg.TestImports)
+		addGoDependencies(testDeps, repo, pkg.XTestImports)
 	}
 
-	if len(godependencies) == 0 {
+	if len(runtimeDeps) == 0 && len(testDeps) == 0 {
 		return nil
 	}
 
@@ -317,7 +384,8 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 	}
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		delete(godependencies, line)
+		delete(runtimeDeps, line)
+		delete(testDeps, line)
 	}
 
 	// Resolve all packages to the root of their repository.
@@ -336,11 +404,7 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 	//	u.repoDeps = append(u.repoDeps, root)
 	//}
 
-	// Alternatively, just list all import paths as dependencies.
-	u.repoDeps = make([]string, 0, len(godependencies))
-	for dep := range godependencies {
-		u.repoDeps = append(u.repoDeps, dep)
-	}
+	u.setRepoDependencies(runtimeDeps, testDeps)
 
 	return nil
 }
@@ -735,19 +799,8 @@ func mainPack(args []string, usage func()) {
 		log.Fatalf("Could not create repository: %v\n", err)
 	}
 
-	seen := make(map[string]bool)
-	pkgdependencies := make([]string, 0, len(u.repoDeps))
-	for _, dep := range u.repoDeps {
-		pkgname := nameFromGopkg(dep, typeLibrary, "", allowUnknownHoster)
-		if !seen[pkgname] {
-			seen[pkgname] = true
-			pkgdependencies = append(pkgdependencies, pkgname)
-		}
-	}
-	// optional: sort.Strings(debdependencies)
-
 	if err := writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, u.version,
-		pkgType, pkgdependencies, u); err != nil {
+		pkgType, u); err != nil {
 		log.Fatalf("Could not create spec file: %v\n", err)
 	}
 
