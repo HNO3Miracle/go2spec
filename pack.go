@@ -478,6 +478,7 @@ func shortHostName(gopkg string, allowUnknownHoster bool) (host string, err erro
 		"go.opentelemetry.io":  "opentelemetry",
 		"go.step.sm":           "step",
 		"go.uber.org":          "uber",
+		"go.yaml.in":           "yaml",
 		"go4.org":              "go4",
 		"gocloud.dev":          "gocloud",
 		"golang.org":           "golang",
