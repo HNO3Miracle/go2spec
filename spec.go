@@ -72,7 +72,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// Header
 	fmt.Fprintf(f, "Name:           %s\n", openRuyiSrc)
 
-	// Some times typeLibrary is treat as typeProgram, 
+	// Some times typeLibrary is treat as typeProgram,
 	// So we add an additional Name line, and keep one of those mannually
 	switch pkgType {
 	case typeProgram:
@@ -175,7 +175,7 @@ func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, long
 	fmt.Fprintf(f, "%%description -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "%s\n", longdesc)
 	fmt.Fprintf(f, "\n")
-	fmt.Fprintf(f, "This package provides the Go source files of %s for development.\n")
+	fmt.Fprintf(f, "This package provides the Go source files of %s for development.\n", gopkg)
 }
 
 // For program subpackage
