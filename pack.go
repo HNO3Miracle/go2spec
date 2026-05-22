@@ -208,7 +208,7 @@ func (u *upstream) tar(gopath, repo string) error {
 			} else if err == errUnsupportedHoster {
 				log.Printf("INFO: Hoster does not provide release tarball\n")
 			} else {
-				return fmt.Errorf("tarball from hoster: %w", err)
+				log.Printf("WARNING: Could not download release tarball from hoster, falling back to local git archive: %v\n", err)
 			}
 		}
 	}
