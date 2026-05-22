@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/net/publicsuffix"
 	"io"
 	"log"
 	"net/http"
@@ -12,11 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/tools/go/vcs"
 )
 
 type packageType int
@@ -31,7 +31,8 @@ const (
 
 // upstream describes the upstream repo we are about to package.
 type upstream struct {
-	rr           *vcs.RepoRoot
+	repoURL      string
+	modulePath   string
 	tarPath      string   // path to the downloaded or generated orig tarball tempfile
 	compression  string   // compression method, either "gz" or "xz"
 	version      string   // upstream version number, e.g. 0.0~git20180204.1d24609
@@ -39,6 +40,7 @@ type upstream struct {
 	commitIsh    string   // commit-ish corresponding to upstream version to be packaged
 	remote       string   // git remote, set to short hostname if upstream git history is included
 	firstMain    string   // import path of the first main package within repo, if any
+	packageName  string   // package name of the requested package from pkg.go.dev
 	vendorDirs   []string // all vendor sub directories, relative to the repo directory
 	repoDeps     []string // all non-stdlib imports needed for build or tests
 	repoRunDeps  []string // non-stdlib imports needed by normal builds, excluding test-only imports
@@ -122,29 +124,92 @@ func downloadFile(filename, url string) error {
 	return nil
 }
 
-// get downloads the specified Go package into the provided GOPATH,
+// get downloads the source module into the provided GOPATH,
 // checking out the specified revision if non-empty.
-func (u *upstream) get(gopath, repo, rev string) error {
+func (u *upstream) get(gopath, sourceRepo, requestedPath, rev string) error {
 	done := make(chan struct{})
 	defer close(done)
-	go progressSize("go get", filepath.Join(gopath, "src"), done)
+	go progressSize("git clone", filepath.Join(gopath, "src"), done)
 
-	rr, err := vcs.RepoRootForImportPath(repo, false)
+	info, err := getPkgsiteInfo(context.TODO(), requestedPath)
 	if err != nil {
-		return fmt.Errorf("get repo root: %w", err)
+		return fmt.Errorf("get pkgsite metadata: %w", err)
 	}
-	u.rr = rr
-	dir := filepath.Join(gopath, "src", rr.Root)
+	u.packageName = info.Package.Name
+	u.modulePath = info.Module.Path
+	u.repoURL = gitCloneURLFromRepoURL(info.Module.RepoURL)
+	if u.repoURL == "" {
+		return fmt.Errorf("pkgsite module %q has no repository URL", info.Module.Path)
+	}
+
+	dir := filepath.Join(gopath, "src", sourceRepo)
+	if err := os.MkdirAll(filepath.Dir(dir), 0755); err != nil {
+		return fmt.Errorf("mkdir clone parent: %w", err)
+	}
+
+	cmd := exec.Command("git", "clone", u.repoURL, dir)
+	cmd.Env = passthroughEnv()
+	cmd.Stderr = os.Stderr
+	log.Println("get: Running", cmd)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git clone: %w", err)
+	}
+
 	if rev != "" {
-		// Run "git clone {repo} {dir}" and "git checkout {tag}"
-		return rr.VCS.CreateAtRev(dir, rr.Repo, rev)
+		cmd = exec.Command("git", "-c", "advice.detachedHead=false", "checkout", rev)
+		cmd.Dir = dir
+		cmd.Env = passthroughEnv()
+		cmd.Stderr = os.Stderr
+		log.Println("get: Running", cmd, "in", cmd.Dir)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("git checkout %q: %w", rev, err)
+		}
 	}
-	// Run "git clone {repo} {dir}" (or the equivalent command for hg, svn, bzr)
-	return rr.VCS.Create(dir, rr.Repo)
+	return nil
 }
 
-func (u *upstream) tarballUrl() (string, error) {
-	repo := strings.TrimSuffix(u.rr.Repo, ".git")
+func guessedPackageType(u *upstream) packageType {
+	if u.packageName == "main" || (u.packageName == "" && u.firstMain != "") {
+		return typeProgram
+	}
+	return typeLibrary
+}
+
+// sourceImportPathForPackage returns the module root used for source checkout
+// and tarball generation, while callers keep the requested import path for
+// naming and go_import_path.
+func sourceImportPathForPackage(requestedPath string, info *pkgsiteInfo) string {
+	if info != nil && info.Package.ModulePath != "" {
+		return info.Package.ModulePath
+	}
+	if info != nil && info.Module.Path != "" {
+		return info.Module.Path
+	}
+	return requestedPath
+}
+
+// gitCloneURLFromRepoURL converts repository URLs returned by pkg.go.dev into
+// something git clone understands. pkg.go.dev reports golang.org/x/* modules
+// with a cs.opensource.google browser URL, so rewrite those to go.googlesource.com.
+func gitCloneURLFromRepoURL(repoURL string) string {
+	repoURL = strings.TrimSuffix(strings.TrimSpace(repoURL), ".git")
+	u, err := url.Parse(repoURL)
+	if err != nil || u.Host != "cs.opensource.google" {
+		return repoURL
+	}
+
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) == 3 && parts[0] == "go" && parts[1] == "x" {
+		return "https://go.googlesource.com/" + parts[2]
+	}
+	return repoURL
+}
+
+func (u *upstream) tarballURLForRef(ref, compression string) (string, error) {
+	repo := strings.TrimSuffix(u.repoURL, ".git")
+	if repo == "" {
+		return "", fmt.Errorf("repository URL is empty")
+	}
 	repoU, err := url.Parse(repo)
 	if err != nil {
 		return "", fmt.Errorf("parse URL: %w", err)
@@ -153,24 +218,136 @@ func (u *upstream) tarballUrl() (string, error) {
 	switch repoU.Host {
 	case "github.com":
 		return fmt.Sprintf("%s/archive/%s.tar.%s",
-			repo, u.tag, u.compression), nil
+			repo, ref, compression), nil
 	case "gitlab.com", "salsa.debian.org":
 		parts := strings.Split(repoU.Path, "/")
 		if len(parts) < 3 {
-			return "", fmt.Errorf("incomplete repo URL: %s", u.rr.Repo)
+			return "", fmt.Errorf("incomplete repo URL: %s", u.repoURL)
 		}
-		project := parts[2]
+		project := strings.TrimSuffix(parts[len(parts)-1], ".git")
 		return fmt.Sprintf("%s/-/archive/%s/%s-%s.tar.%s",
-			repo, u.tag, project, u.tag, u.compression), nil
+			repo, ref, project, ref, compression), nil
 	case "git.sr.ht":
 		return fmt.Sprintf("%s/archive/%s.tar.%s",
-			repo, u.tag, u.compression), nil
+			repo, ref, compression), nil
 	case "codeberg.org":
 		return fmt.Sprintf("%s/archive/%s.tar.%s",
-			repo, u.tag, u.compression), nil
+			repo, ref, compression), nil
 	default:
 		return "", errUnsupportedHoster
 	}
+}
+
+func (u *upstream) tarballUrl() (string, error) {
+	return u.tarballURLForRef(u.tag, u.compression)
+}
+
+func moduleProxyEscapedPath(modulePath string) string {
+	parts := strings.Split(strings.Trim(modulePath, "/"), "/")
+	for i, part := range parts {
+		parts[i] = moduleProxyEscapeString(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+// moduleProxyEscapeString applies the case-escape required by the Go module
+// proxy protocol: uppercase letters become "!" followed by lowercase.
+// See https://go.dev/ref/mod#goproxy-protocol.
+func moduleProxyEscapeString(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			b.WriteByte('!')
+			b.WriteRune(r + ('a' - 'A'))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.ReplaceAll(url.PathEscape(b.String()), "%21", "!")
+}
+
+// moduleProxyVersionForSpec leaves RPM macros unchanged and otherwise applies
+// module proxy escaping so versions like v1.0.0-RC1 become v1.0.0-!r!c1.
+func moduleProxyVersionForSpec(version string) string {
+	if strings.Contains(version, "%{") {
+		return version
+	}
+	return moduleProxyEscapeString(version)
+}
+
+func repoRootImportPath(repoURL string) string {
+	u, err := url.Parse(strings.TrimSuffix(repoURL, ".git"))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	switch u.Host {
+	case "github.com", "gitlab.com", "codeberg.org", "salsa.debian.org":
+		if len(parts) >= 2 {
+			return u.Host + "/" + strings.Join(parts[:2], "/")
+		}
+	}
+	return ""
+}
+
+// moduleUsesRepoSubdir reports whether modulePath lives in a repository
+// subdirectory. A trailing /vN semantic import version suffix is treated as
+// part of the repo-root module path, not as a subdirectory.
+func moduleUsesRepoSubdir(modulePath, repoURL string) bool {
+	root := repoRootImportPath(repoURL)
+	if root == "" || !strings.HasPrefix(modulePath, root+"/") {
+		return false
+	}
+	rest := strings.TrimPrefix(modulePath, root+"/")
+	return !regexp.MustCompile(`^v\d+$`).MatchString(rest)
+}
+
+// sourceRefForSpec picks the git ref for Source0, preferring RPM macros when
+// the upstream version maps cleanly to %{commit_id} or %{version}.
+func (u *upstream) sourceRefForSpec() (string, error) {
+	ref := u.tag
+	if strings.Contains(u.version, "commit_id") {
+		ref = "%{commit_id}"
+	} else if u.isRelease && u.tag == "v"+u.version {
+		ref = "v%{version}"
+	} else if u.isRelease && u.tag == u.version {
+		ref = "%{version}"
+	} else if ref == "" {
+		ref = u.commitIsh
+	}
+	if ref == "" {
+		return "", fmt.Errorf("source reference is empty")
+	}
+	return ref, nil
+}
+
+// sourceURLForSpec returns the Source0 URL for the spec file. It prefers
+// hoster tarballs for repo-root modules, and uses proxy.golang.org zips for
+// repo subdirectories or unsupported hosters. It returns an error for
+// commit-pinned subdirectory modules because the proxy requires a canonical
+// pseudo-version.
+func (u *upstream) sourceURLForSpec(modulePath string) (string, error) {
+	ref, err := u.sourceRefForSpec()
+	if err != nil {
+		return "", err
+	}
+	if moduleUsesRepoSubdir(modulePath, u.repoURL) {
+		if strings.Contains(ref, "commit_id") {
+			return "", fmt.Errorf("module proxy Source0 for commit-pinned subdirectory module %q requires a canonical pseudo-version", modulePath)
+		}
+		return fmt.Sprintf("https://proxy.golang.org/%s/@v/%s.zip#/%%{_name}-%%{version}.zip",
+			moduleProxyEscapedPath(modulePath), moduleProxyVersionForSpec(ref)), nil
+	}
+	tarURL, err := u.tarballURLForRef(ref, "gz")
+	if err == nil {
+		return fmt.Sprintf("%s#/%%{_name}-%%{version}.tar.gz", tarURL), nil
+	}
+	if err != errUnsupportedHoster || modulePath == "" || strings.Contains(ref, "commit_id") {
+		return "", err
+	}
+
+	return fmt.Sprintf("https://proxy.golang.org/%s/@v/%s.zip#/%%{_name}-%%{version}.zip",
+		moduleProxyEscapedPath(modulePath), moduleProxyVersionForSpec(ref)), nil
 }
 
 func (u *upstream) tarballFromHoster() error {
@@ -272,24 +449,29 @@ type goListPackage struct {
 	Imports      []string
 	TestImports  []string
 	XTestImports []string
-	Error        *goListPackageError
+	Error        *struct {
+		Err string
+	}
 }
 
-type goListPackageError struct {
-	Err string
+func shouldIgnoreGoDependency(p, repo string) bool {
+	if p == "" {
+		return true
+	}
+	// Strip packages that are included in the repository we are packaging.
+	if strings.HasPrefix(p, repo+"/") || p == repo {
+		return true
+	}
+	if p == "C" {
+		// TODO: maybe parse the comments to figure out C deps from pkg-config files?
+		return true
+	}
+	return false
 }
 
 func addGoDependencies(deps map[string]bool, repo string, imports []string) {
 	for _, p := range imports {
-		if p == "" {
-			continue
-		}
-		// Strip packages that are included in the repository we are packaging.
-		if strings.HasPrefix(p, repo+"/") || p == repo {
-			continue
-		}
-		if p == "C" {
-			// TODO: maybe parse the comments to figure out C deps from pkg-config files?
+		if shouldIgnoreGoDependency(p, repo) {
 			continue
 		}
 		deps[p] = true
@@ -388,44 +570,30 @@ func (u *upstream) findDependencies(gopath, repo string) error {
 		delete(testDeps, line)
 	}
 
-	// Resolve all packages to the root of their repository.
-	//roots := make(map[string]bool)
-	//for dep := range godependencies {
-	//	rr, err := vcs.RepoRootForImportPath(dep, false)
-	//	if err != nil {
-	//		log.Printf("Could not determine repo path for import path %q: %v\n", dep, err)
-	//		continue
-	//	}
-	//	roots[rr.Root] = true
-	//}
-
-	//u.repoDeps = make([]string, 0, len(godependencies))
-	//for root := range roots {
-	//	u.repoDeps = append(u.repoDeps, root)
-	//}
-
 	u.setRepoDependencies(runtimeDeps, testDeps)
 
 	return nil
 }
 
-// makeUpstreamSourceTarball downloads the specified Go package from the Internet,
+// makeUpstreamSourceTarball downloads the source module from the Internet,
 // checks out the specified revision, determines the version number, removes
 // vendored dependencies, and creates a tarball of the upstream source code.
+// It also discovers main packages and dependencies, and may check out a release
+// tag different from the requested revision when pkgVersionFromGit selects one.
 // It returns an upstream struct describing the downloaded package.
-func makeUpstreamSourceTarball(repo, revision string, forcePrerelease bool) (*upstream, error) {
+func makeUpstreamSourceTarball(requestedPath, sourceRepo, revision string, forcePrerelease bool) (*upstream, error) {
 	gopath, err := os.MkdirTemp("", "pack-tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create tmp dir: %w", err)
 	}
 	defer os.RemoveAll(gopath)
-	repoDir := filepath.Join(gopath, "src", repo)
+	repoDir := filepath.Join(gopath, "src", sourceRepo)
 
 	var u upstream
 
-	log.Printf("Downloading %q\n", repo+"/...")
-	if err := u.get(gopath, repo, revision); err != nil {
-		return nil, fmt.Errorf("go get: %w", err)
+	log.Printf("Downloading %q\n", sourceRepo+"/...")
+	if err := u.get(gopath, sourceRepo, requestedPath, revision); err != nil {
+		return nil, fmt.Errorf("get source: %w", err)
 	}
 
 	// Verify early this repository uses git (we call pkgVersionFromGit later):
@@ -453,22 +621,43 @@ func makeUpstreamSourceTarball(repo, revision string, forcePrerelease bool) (*up
 
 	log.Printf("Determining upstream version number\n")
 
-	u.version, err = pkgVersionFromGit(repoDir, &u, revision, forcePrerelease)
+	preferredRevision := revision
+	if preferredRevision == "" {
+		// Reuses the cache populated by u.get above when available.
+		if info, err := getPkgsiteInfo(context.TODO(), requestedPath); err == nil {
+			preferredRevision = info.Package.Version
+			log.Printf("Using pkg.go.dev latest version %q as the preferred release", preferredRevision)
+		}
+	}
+	u.version, err = pkgVersionFromGit(repoDir, &u, preferredRevision, forcePrerelease)
 	if err != nil {
 		return nil, fmt.Errorf("get package version from Git: %w", err)
 	}
 
 	log.Printf("Package version is %q\n", u.version)
 
-	if err := u.findMains(gopath, repo); err != nil {
+	if u.isRelease && u.tag != "" {
+		// pkgVersionFromGit may select a release tag different from the revision
+		// passed by the user; dependency and tarball discovery must use that tree.
+		cmd := exec.Command("git", "-c", "advice.detachedHead=false", "checkout", u.tag)
+		cmd.Dir = repoDir
+		cmd.Env = passthroughEnv()
+		cmd.Stderr = os.Stderr
+		log.Println("makeUpstreamSourceTarball: Running", cmd, "in", cmd.Dir)
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("git checkout release tag %q: %w", u.tag, err)
+		}
+	}
+
+	if err := u.findMains(gopath, sourceRepo); err != nil {
 		return nil, fmt.Errorf("find mains: %w", err)
 	}
 
-	if err := u.findDependencies(gopath, repo); err != nil {
+	if err := u.findDependencies(gopath, sourceRepo); err != nil {
 		return nil, fmt.Errorf("find dependencies: %w", err)
 	}
 
-	if err := u.tar(gopath, repo); err != nil {
+	if err := u.tar(gopath, sourceRepo); err != nil {
 		return nil, fmt.Errorf("tar: %w", err)
 	}
 
@@ -538,11 +727,11 @@ func shortHostName(gopkg string, allowUnknownHoster bool) (host string, err erro
 		"gitlab.com":           "gitlab",
 		"go.bug.st":            "bugst",
 		"go.cypherpunks.ru":    "cypherpunks",
+		"go.yaml.in":           "yaml",
 		"go.mongodb.org":       "mongodb",
 		"go.opentelemetry.io":  "opentelemetry",
 		"go.step.sm":           "step",
 		"go.uber.org":          "uber",
-		"go.yaml.in":           "yaml",
 		"go4.org":              "go4",
 		"gocloud.dev":          "gocloud",
 		"golang.org":           "golang",
@@ -697,14 +886,16 @@ func mainPack(args []string, usage func()) {
 	// Remove URL scheme if present (https://, http://, git://, etc.)
 	gopkg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(gopkg, "https://"), "http://"), "git://")
 
-	// Verify that the provided argument is a valid Go package import path
-	rr, err := vcs.RepoRootForImportPath(gopkg, false)
+	// Verify the provided argument using the official pkg.go.dev API. Keep the
+	// requested path for naming and go_import_path; use the module path only for
+	// source checkout and tarball generation.
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
 	if err != nil {
 		log.Fatalf("Verifying arguments: %v — did you specify a Go package import path?", err)
 	}
-	if gopkg != rr.Root {
-		log.Printf("Continuing with repository root %q instead of specified import path %q", rr.Root, gopkg)
-		gopkg = rr.Root
+	sourceGopkg := sourceImportPathForPackage(gopkg, info)
+	if sourceGopkg != gopkg {
+		log.Printf("Using module root %q as source checkout for specified import path %q", sourceGopkg, gopkg)
 	}
 
 	// Set default source and binary package names.
@@ -750,25 +941,33 @@ func mainPack(args []string, usage func()) {
 	// NOTE: directory existence is checked after determining final openRuyiSrc
 
 	// Create a tarball of the upstream source
-	u, err := makeUpstreamSourceTarball(gopkg, gitRevision, forcePrerelease)
+	u, err := makeUpstreamSourceTarball(gopkg, sourceGopkg, gitRevision, forcePrerelease)
 	if err != nil {
 		log.Fatalf("Could not create a tarball of the upstream source: %v\n", err)
 	}
 
 	if pkgType == typeGuess {
-		if u.firstMain != "" {
-			log.Printf("Assuming you are packaging a program (because %q defines a main package), use -type to override\n", u.firstMain)
+		switch guessedPackageType(u) {
+		case typeProgram:
+			if u.packageName == "main" {
+				log.Printf("Assuming you are packaging a program (because pkg.go.dev reports package %q as main), use -type to override\n", gopkg)
+			} else {
+				log.Printf("Assuming you are packaging a program (because %q defines a main package), use -type to override\n", u.firstMain)
+			}
 			pkgType = typeProgram
 			openRuyiSrc = nameFromGopkg(gopkg, pkgType, customProgPkgName, allowUnknownHoster)
-		} else {
+		default:
+			if u.firstMain != "" {
+				log.Printf("Found main package %q, but pkg.go.dev reports root package %q; assuming library, use -type to override\n", u.firstMain, u.packageName)
+			}
 			pkgType = typeLibrary
 		}
 	}
 
 	// Now that we know the final package name, check output directory
-	info, err := os.Stat(openRuyiSrc)
+	dirInfo, err := os.Stat(openRuyiSrc)
 	if err == nil {
-		if !info.IsDir() {
+		if !dirInfo.IsDir() {
 			log.Fatalf("%q exists but is not a directory\n", openRuyiSrc)
 		}
 		entries, err := os.ReadDir(openRuyiSrc)

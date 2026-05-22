@@ -24,7 +24,6 @@ var (
 
 	// uversionPrereleaseRegexp checks for upstream pre-release
 	// so that '-' can be replaced with '~' in pkgVersionFromGit.
-	// To be kept in sync with the regexp portion of uversionmanglePattern in spec.go
 	uversionPrereleaseRegexp = regexp.MustCompile(`(\d)[_\.\-\+]?(RC|rc|pre|dev|beta|alpha)[.]?(\d*)$`)
 )
 
@@ -42,8 +41,10 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 	var cmd *exec.Cmd // the temporary shell commands we execute
 
 	// If the user specifies a valid tag as the preferred revision, that tag should be used without additional heuristics.
-	if u.rr != nil {
-		if out, err := u.rr.VCS.Tags(gitdir); err == nil && slices.Contains(out, preferredRev) {
+	if preferredRev != "" {
+		cmd = exec.Command("git", "tag", "--list", preferredRev)
+		cmd.Dir = gitdir
+		if out, err := cmd.Output(); err == nil && slices.Contains(strings.Fields(string(out)), preferredRev) {
 			latestTag = preferredRev
 		}
 	}

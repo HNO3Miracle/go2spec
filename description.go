@@ -13,8 +13,7 @@ import (
 //go:embed description.json
 var descriptionJSONBytes []byte
 
-// reformatForControl reformats the wrapped description
-// to conform to Debian’s control format.
+// reformatForControl reformats wrapped text for the RPM spec's %description.
 func reformatForControl(raw string) string {
 	output := ""
 	next_prefix := ""
@@ -47,8 +46,8 @@ func reformatForControl(raw string) string {
 	return output
 }
 
-// markdownToLongDescription converts Markdown to plain text
-// and reformat it for expanded description in debian/control.
+// markdownToLongDescription converts Markdown to plain text for the RPM spec's
+// %description section.
 func markdownToLongDescription(markdown string) (string, error) {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStylesFromJSONBytes(descriptionJSONBytes),
@@ -63,23 +62,17 @@ func markdownToLongDescription(markdown string) (string, error) {
 	return reformatForControl(out), nil
 }
 
-// getDescriptionForGopkg reads from README.md (or equivalent) from GitHub,
-// intended for extended description in debian/control.
+// getLongDescriptionForGopkg reads README.md (or equivalent) from pkg.go.dev,
+// intended for the RPM spec's %description section.
 func getLongDescriptionForGopkg(gopkg string) (string, error) {
-	owner, repo, err := findGitHubRepo(gopkg)
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
 	if err != nil {
-		return "", fmt.Errorf("find github repo: %w", err)
+		return "", fmt.Errorf("get pkgsite metadata: %w", err)
 	}
-
-	rr, _, err := gitHub.Repositories.GetReadme(context.TODO(), owner, repo, nil)
-	if err != nil {
-		return "", fmt.Errorf("get readme: %w", err)
+	if info.Module.Readme == nil || strings.TrimSpace(info.Module.Readme.Contents) == "" {
+		return "", fmt.Errorf("pkgsite module %q has no README", info.Module.Path)
 	}
-
-	content, err := rr.GetContent()
-	if err != nil {
-		return "", fmt.Errorf("get content: %w", err)
-	}
+	content := info.Module.Readme.Contents
 
 	// Supported filename suffixes are from
 	// https://github.com/github/markup/blob/master/README.md
@@ -88,10 +81,11 @@ func getLongDescriptionForGopkg(gopkg string) (string, error) {
 	// fairly involved, but it’d be the most correct solution to the problem at
 	// hand. Our current code just knows markdown, which is good enough since
 	// most (Go?) projects in fact use markdown for their README files.
-	if !strings.HasSuffix(rr.GetName(), "md") &&
-		!strings.HasSuffix(rr.GetName(), "markdown") &&
-		!strings.HasSuffix(rr.GetName(), "mdown") &&
-		!strings.HasSuffix(rr.GetName(), "mkdn") {
+	readmeName := strings.ToLower(info.Module.Readme.Filepath)
+	if !strings.HasSuffix(readmeName, "md") &&
+		!strings.HasSuffix(readmeName, "markdown") &&
+		!strings.HasSuffix(readmeName, "mdown") &&
+		!strings.HasSuffix(readmeName, "mkdn") {
 		return reformatForControl(content), nil
 	}
 

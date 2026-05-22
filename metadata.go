@@ -3,128 +3,139 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"html"
+	"path"
 	"regexp"
 	"strings"
-
-	"golang.org/x/net/html"
 )
 
-// To update, use:
-// curl -s https://api.github.com/licenses | jq '.[].key'
-var githubLicenseToSPDXLicense = map[string]string{
-	//"agpl-3.0"
-	"apache-2.0":   "Apache-2.0",
-	"artistic-2.0": "Artistic-2.0",
-	"bsd-2-clause": "BSD-2-Clause",
-	"bsd-3-clause": "BSD-3-Clause",
-	"cc0-1.0":      "CC0-1.0",
-	//"epl-1.0" (eclipse public license)
-	"gpl-2.0":  "GPL-2.0-only",
-	"gpl-3.0":  "GPL-3.0-only",
-	"isc":      "ISC",
-	"lgpl-2.1": "LGPL-2.1-only",
-	"lgpl-3.0": "LGPL-3.0-only",
-	"mit":      "MIT",
-	"mpl-2.0":  "MPL-2.0",
-	//"unlicense"
+func getRepoURLForGopkg(gopkg string) (string, error) {
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
+	if err != nil {
+		return "", err
+	}
+	repoURL := strings.TrimSpace(info.Module.RepoURL)
+	if repoURL == "" {
+		return "", fmt.Errorf("pkgsite module %q has no repository URL", info.Module.Path)
+	}
+	return gitCloneURLFromRepoURL(repoURL), nil
 }
 
-var githubRegexp = regexp.MustCompile(`github\.com/([^/]+/[^/]+)`)
+var (
+	htmlTagRegexp      = regexp.MustCompile(`<[^>]*>`)
+	markdownImageRegex = regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`)
+	markdownLinkRegex  = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	packagePrefixRegex = regexp.MustCompile(`^Package\s+\S+\s+`)
+)
 
-func findGitHubOwnerRepo(gopkg string) (string, error) {
-	if strings.HasPrefix(gopkg, "github.com/") {
-		return strings.TrimPrefix(gopkg, "github.com/"), nil
+// cleanSummaryCandidate turns a godoc synopsis or README line into an
+// RPM-style Summary by stripping markup, keeping the first sentence, dropping
+// the leading "Package foo" convention, and capitalizing the result.
+func cleanSummaryCandidate(summary string) string {
+	summary = html.UnescapeString(strings.TrimSpace(summary))
+	summary = markdownImageRegex.ReplaceAllString(summary, "")
+	summary = markdownLinkRegex.ReplaceAllString(summary, "$1")
+	summary = htmlTagRegexp.ReplaceAllString(summary, " ")
+	summary = strings.ReplaceAll(summary, "`", "")
+	summary = strings.Join(strings.Fields(summary), " ")
+	summary = strings.Trim(summary, " \t\n\r#*-_")
+	if end := strings.Index(summary, ". "); end >= 0 {
+		summary = summary[:end]
 	}
-	resp, err := http.Get("https://" + gopkg + "?go-get=1")
-	if err != nil {
-		return "", fmt.Errorf("HTTP get: %w", err)
+	summary = packagePrefixRegex.ReplaceAllString(summary, "")
+	if summary != "" && summary[0] >= 'a' && summary[0] <= 'z' {
+		summary = string(summary[0]-('a'-'A')) + summary[1:]
 	}
-	defer resp.Body.Close()
-	z := html.NewTokenizer(resp.Body)
-	for {
-		tt := z.Next()
-		if tt == html.ErrorToken {
-			return "", fmt.Errorf("%q is not on GitHub", gopkg)
-		}
-		token := z.Token()
-		if token.Data != "meta" {
+	if summary == "" ||
+		strings.HasPrefix(summary, "[!") ||
+		strings.HasPrefix(summary, "![") ||
+		strings.HasPrefix(summary, "<!--") ||
+		strings.ContainsAny(summary, "<>") {
+		return ""
+	}
+	return strings.TrimSuffix(summary, ".")
+}
+
+// summaryFromReadme returns the first prose line of a README, skipping code
+// fences, headings, HTML comments, badges, admonitions, and images.
+func summaryFromReadme(markdown string) string {
+	inFence := false
+	lines := strings.Split(markdown, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
 			continue
 		}
-		var meta struct {
-			name, content string
-		}
-		for _, attr := range token.Attr {
-			if attr.Key == "name" {
-				meta.name = attr.Val
-			}
-			if attr.Key == "content" {
-				meta.content = attr.Val
+		if i+1 < len(lines) {
+			next := strings.TrimSpace(lines[i+1])
+			if next != "" && strings.Trim(next, "=-") == "" {
+				continue
 			}
 		}
-
-		match := func(name string, length int) string {
-			if f := strings.Fields(meta.content); meta.name == name && len(f) == length {
-				if f[0] != gopkg {
-					return ""
-				}
-				if repoMatch := githubRegexp.FindStringSubmatch(f[2]); repoMatch != nil {
-					return strings.TrimSuffix(repoMatch[1], ".git")
-				}
-			}
-			return ""
+		if inFence ||
+			line == "" ||
+			strings.HasPrefix(line, "#") ||
+			strings.HasPrefix(line, "[!") ||
+			strings.HasPrefix(line, "![") ||
+			strings.HasPrefix(line, "<!--") ||
+			strings.HasPrefix(line, "<p align=") ||
+			strings.HasPrefix(line, "---") ||
+			strings.Trim(line, "=-") == "" {
+			continue
 		}
-		if repo := match("go-import", 3); repo != "" {
-			return repo, nil
-		}
-		if repo := match("go-source", 4); repo != "" {
-			return repo, nil
+		if summary := cleanSummaryCandidate(line); summary != "" {
+			return summary
 		}
 	}
+	return ""
 }
 
-func findGitHubRepo(gopkg string) (owner string, repo string, _ error) {
-	ownerrepo, err := findGitHubOwnerRepo(gopkg)
-	if err != nil {
-		return "", "", fmt.Errorf("find GitHub owner repo: %w", err)
+func unusableSummary(summary, gopkg string, info *pkgsiteInfo) bool {
+	if summary == "" {
+		return true
 	}
-	parts := strings.Split(ownerrepo, "/")
-	if got, want := len(parts), 2; got != want {
-		return "", "", fmt.Errorf("invalid GitHub repo: %q does not follow owner/repo", repo)
-	}
-	return parts[0], parts[1], nil
+	base := path.Base(gopkg)
+	moduleBase := path.Base(info.Module.Path)
+	return strings.EqualFold(summary, base) ||
+		strings.EqualFold(summary, moduleBase) ||
+		strings.EqualFold(summary, info.Package.Name)
 }
 
 func getLicenseForGopkg(gopkg string) (string, error) {
-	owner, repo, err := findGitHubRepo(gopkg)
-	if err != nil {
-		return "", fmt.Errorf("find GitHub repo: %w", err)
-	}
-
-	rl, _, err := gitHub.Repositories.License(context.TODO(), owner, repo)
-	if err != nil {
-		return "", fmt.Errorf("get license for Go package: %w", err)
-	}
-
-	if license, ok := githubLicenseToSPDXLicense[rl.GetLicense().GetKey()]; ok {
-		return license, nil
-	}
-
-	return "TODO", nil
-}
-
-// getDescriptionForGopkg gets the package description from GitHub,
-// intended for the synopsis or the short description in debian/control.
-func getDescriptionForGopkg(gopkg string) (string, error) {
-	owner, repo, err := findGitHubRepo(gopkg)
-	if err != nil {
-		return "", fmt.Errorf("find GitHub repo: %w", err)
-	}
-
-	rr, _, err := gitHub.Repositories.Get(context.TODO(), owner, repo)
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
 	if err != nil {
 		return "", err
 	}
 
-	return strings.TrimSpace(rr.GetDescription()), nil
+	licenses := info.Module.Licenses
+	if len(licenses) == 0 {
+		licenses = info.Package.Licenses
+	}
+
+	return pkgsiteLicenseExpression(licenses), nil
+}
+
+// getDescriptionForGopkg gets the package synopsis from pkg.go.dev,
+// intended for the summary in the RPM spec.
+func getDescriptionForGopkg(gopkg string) (string, error) {
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
+	if err != nil {
+		return "", err
+	}
+
+	description := cleanSummaryCandidate(info.Package.Synopsis)
+	if unusableSummary(description, gopkg, info) {
+		description = ""
+	}
+	if description == "" && info.Module.Readme != nil {
+		description = summaryFromReadme(info.Module.Readme.Contents)
+		if unusableSummary(description, gopkg, info) {
+			description = ""
+		}
+	}
+	if description == "" {
+		return "", fmt.Errorf("no usable synopsis for %q", gopkg)
+	}
+	return description, nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,65 @@ import (
 	"sort"
 	"strings"
 )
+
+type specAssetFiles struct {
+	licenseFiles []string
+	readmeFile   string
+}
+
+func cleanSpecAssetPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	path = strings.TrimLeft(path, "/")
+	if path == "" || strings.HasPrefix(path, "../") || strings.Contains(path, "/../") || path == ".." {
+		return ""
+	}
+	return path
+}
+
+func pkgsiteLicenseFilePaths(licenses []pkgsiteLicense) []string {
+	topLevel := make([]pkgsiteLicense, 0, len(licenses))
+	for _, license := range licenses {
+		if !strings.Contains(strings.Trim(license.FilePath, "/"), "/") {
+			topLevel = append(topLevel, license)
+		}
+	}
+	if len(topLevel) > 0 {
+		licenses = topLevel
+	}
+
+	seen := make(map[string]bool)
+	paths := make([]string, 0, len(licenses))
+	for _, license := range licenses {
+		path := cleanSpecAssetPath(license.FilePath)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func getSpecAssetFilesForGopkg(gopkg string) (specAssetFiles, error) {
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
+	if err != nil {
+		return specAssetFiles{}, err
+	}
+
+	licenses := info.Module.Licenses
+	if len(licenses) == 0 {
+		licenses = info.Package.Licenses
+	}
+
+	assets := specAssetFiles{
+		licenseFiles: pkgsiteLicenseFilePaths(licenses),
+	}
+	if info.Module.Readme != nil {
+		assets.readmeFile = cleanSpecAssetPath(info.Module.Readme.Filepath)
+	}
+	return assets, nil
+}
 
 func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version string,
 	pkgType packageType, u *upstream) error {
@@ -35,14 +95,18 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 		log.Printf("Could not determine license for %q: %v\n", gopkg, err)
 		license = "TODO"
 	}
+	assetFiles, err := getSpecAssetFilesForGopkg(gopkg)
+	if err != nil {
+		log.Printf("Could not determine license/doc file paths for %q: %v\n", gopkg, err)
+	}
 	upstreamName := filepath.Base(gopkg)
 	if regexp.MustCompile(`^v\d+$`).MatchString(upstreamName) {
 		upstreamName = filepath.Base(filepath.Dir(gopkg))
 	}
-	owner, repo, err := findGitHubRepo(gopkg)
+	repoURL, err := getRepoURLForGopkg(gopkg)
 	if err != nil {
-		owner = "TODO"
-		repo = "TODO"
+		log.Printf("Could not determine repository URL for %q: %v\n", gopkg, err)
+		repoURL = "TODO"
 	}
 
 	// Write the spec file content
@@ -72,8 +136,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// Header
 	fmt.Fprintf(f, "Name:           %s\n", openRuyiSrc)
 
-	// Some times typeLibrary is treat as typeProgram,
-	// So we add an additional Name line, and keep one of those mannually
+	// Program packages may need manual naming cleanup; keep the library-form
+	// name visible as a second Name line until that workflow is redesigned.
 	switch pkgType {
 	case typeProgram:
 		fmt.Fprintf(f, "Name:           %s\n", openRuyiLib)
@@ -83,15 +147,18 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "Release:        %%autorelease\n")
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
-	fmt.Fprintf(f, "URL:            https://github.com/%s/%s\n", owner, repo)
+	fmt.Fprintf(f, "URL:            %s\n", repoURL)
 	fmt.Fprintf(f, "#!RemoteAsset\n")
-	// If the computed version text contains a commit_id definition (see pkgVersionFromGit),
-	// use the commit_id tarball instead of v%{version}.tar.gz
-	if strings.Contains(u.version, "commit_id") {
-		fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/%%{commit_id}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
-	} else {
-		fmt.Fprintf(f, "Source0:        https://github.com/%s/%s/archive/v%%{version}.tar.gz#/%%{_name}-%%{version}.tar.gz\n", owner, repo)
+	sourceModulePath := u.modulePath
+	if sourceModulePath == "" {
+		sourceModulePath = gopkg
 	}
+	sourceURL, err := u.sourceURLForSpec(sourceModulePath)
+	if err != nil {
+		log.Printf("Could not determine remote source URL for %q: %v\n", gopkg, err)
+		sourceURL = "TODO"
+	}
+	fmt.Fprintf(f, "Source0:        %s\n", sourceURL)
 
 	switch pkgType {
 	case typeLibrary:
@@ -137,7 +204,7 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "\n")
 
 	// %files
-	writeRPMFilesSection(f, openRuyiSrc, openRuyiLib, openRuyiProgram, pkgType)
+	writeRPMFilesSection(f, openRuyiSrc, openRuyiLib, openRuyiProgram, pkgType, assetFiles)
 
 	// %changelog
 	fmt.Fprintf(f, "%%changelog\n")
@@ -192,45 +259,50 @@ func writeRPMProgramSubpackage(f *os.File, gopkg, openRuyiProgram, openRuyiSrc, 
 	fmt.Fprintf(f, "This package contains the %s executable.\n", filepath.Base(gopkg))
 }
 
-func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram string, pkgType packageType) {
+func writeLicenseAndDocFiles(f *os.File, assetFiles specAssetFiles, includeDoc bool) {
+	for _, licenseFile := range assetFiles.licenseFiles {
+		fmt.Fprintf(f, "%%license %s\n", licenseFile)
+	}
+	if includeDoc && assetFiles.readmeFile != "" {
+		fmt.Fprintf(f, "%%doc %s\n", assetFiles.readmeFile)
+	}
+}
+
+func writeRPMFilesSection(f *os.File, openRuyiSrc, openRuyiLib, openRuyiProgram string, pkgType packageType, assetFiles specAssetFiles) {
 	switch pkgType {
 	case typeLibrary:
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE*\n")
-		fmt.Fprintf(f, "%%doc README*\n")
+		writeLicenseAndDocFiles(f, assetFiles, true)
 		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeProgram:
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE*\n")
-		fmt.Fprintf(f, "%%doc README*\n")
+		writeLicenseAndDocFiles(f, assetFiles, true)
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeLibraryProgram:
 		// 库包文件（主包）
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE*\n")
-		fmt.Fprintf(f, "%%doc README*\n")
+		writeLicenseAndDocFiles(f, assetFiles, true)
 		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 		// 程序子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiProgram)
-		fmt.Fprintf(f, "%%license LICENSE*\n")
+		writeLicenseAndDocFiles(f, assetFiles, false)
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 
 	case typeProgramLibrary:
 		// 程序主包文件
 		fmt.Fprintf(f, "%%files\n")
-		fmt.Fprintf(f, "%%license LICENSE*\n")
-		fmt.Fprintf(f, "%%doc README*\n")
+		writeLicenseAndDocFiles(f, assetFiles, true)
 		fmt.Fprintf(f, "%%{_bindir}/%%{_name}\n")
 		fmt.Fprintf(f, "\n")
 		// 库子包文件
 		fmt.Fprintf(f, "%%files -n %s\n", openRuyiLib)
-		fmt.Fprintf(f, "%%license LICENSE*\n")
+		writeLicenseAndDocFiles(f, assetFiles, false)
 		fmt.Fprintf(f, "%%{go_sys_gopath}/%%{go_import_path}\n")
 		fmt.Fprintf(f, "\n")
 	}
