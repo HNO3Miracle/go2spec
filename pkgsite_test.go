@@ -3,8 +3,12 @@ package main
 import (
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -456,4 +460,57 @@ func TestSourceURLForSpecRejectsCommitIDForRepoSubmodule(t *testing.T) {
 	if !strings.Contains(err.Error(), "canonical pseudo-version") {
 		t.Fatalf("sourceURLForSpec() error = %v, want canonical pseudo-version message", err)
 	}
+}
+
+func TestPkgVersionFromGitUsesPackagingDateAndSevenCharHash(t *testing.T) {
+	oldNow := packagingDateNow
+	packagingDateNow = func() time.Time {
+		return time.Date(2025, 8, 8, 12, 0, 0, 0, time.UTC)
+	}
+	defer func() { packagingDateNow = oldNow }()
+
+	dir := t.TempDir()
+	runGit(t, dir, nil, "init")
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/project\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	runGit(t, dir, nil, "add", "go.mod")
+	runGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.invalid",
+		"GIT_AUTHOR_DATE=1999-01-02T03:04:05Z",
+		"GIT_COMMITTER_DATE=1999-01-02T03:04:05Z",
+	}, "commit", "-m", "initial")
+
+	fullHash := strings.TrimSpace(runGit(t, dir, nil, "rev-parse", "HEAD"))
+	want := "0+git20250808." + fullHash[:7] + "\n%define commit_id " + fullHash
+
+	u := upstream{}
+	got, err := pkgVersionFromGit(dir, &u, "", false)
+	if err != nil {
+		t.Fatalf("pkgVersionFromGit() returned error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("pkgVersionFromGit() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "19990102") {
+		t.Fatalf("pkgVersionFromGit() used commit date: %q", got)
+	}
+	if u.commitIsh != fullHash[:7] {
+		t.Fatalf("commitIsh = %q, want %q", u.commitIsh, fullHash[:7])
+	}
+}
+
+func runGit(t *testing.T, dir string, env []string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }

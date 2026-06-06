@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -14,9 +13,6 @@ import (
 )
 
 var (
-	// describeRegexp parses the count and revision part of the “git describe --long” output.
-	describeRegexp = regexp.MustCompile(`-\d+-g([0-9a-f]+)\s*$`)
-
 	// semverRegexp checks if a string is a valid Go semver,
 	// from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 	// with leading "v" added.
@@ -25,7 +21,20 @@ var (
 	// uversionPrereleaseRegexp checks for upstream pre-release
 	// so that '-' can be replaced with '~' in pkgVersionFromGit.
 	uversionPrereleaseRegexp = regexp.MustCompile(`(\d)[_\.\-\+]?(RC|rc|pre|dev|beta|alpha)[.]?(\d*)$`)
+
+	packagingDateNow = time.Now
 )
+
+func packagingDateString() string {
+	return packagingDateNow().Format("20060102")
+}
+
+func shortCommitHash(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
+}
 
 // pkgVersionFromGit determines the actual version to be packaged
 // from the git repository status and user preference.
@@ -111,50 +120,6 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 
 	// Packaging @master (prerelease)
 
-	mainVer := ""
-	//if u.hasRelease {
-	//	mainVer = u.version + "+"
-	//}
-
-	// Find committer date, UNIX timestamp
-	cmd = exec.Command("git", "log", "--pretty=format:%ct", "-n1", "--no-show-signature")
-	cmd.Dir = gitdir
-	lastCommitUnixBytes, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git log: %w", err)
-	}
-	lastCommitUnix, err := strconv.ParseInt(strings.TrimSpace(string(lastCommitUnixBytes)), 0, 64)
-	if err != nil {
-		return "", fmt.Errorf("parse last commit date: %w", err)
-	}
-
-	dateStr := time.Unix(lastCommitUnix, 0).UTC().Format("20060102")
-
-	// Fetch commit hash
-	cmd = exec.Command("git", "describe", "--long", "--tags")
-	cmd.Dir = gitdir
-	lastCommitHash := ""
-	describeBytes, err := cmd.Output()
-	if err != nil {
-		// In case there are no tags at all, we just use the sha of the current commit
-		cmd = exec.Command("git", "rev-parse", "--short", "HEAD")
-		cmd.Dir = gitdir
-		cmd.Stderr = os.Stderr
-		revparseBytes, err := cmd.Output()
-		if err != nil {
-			return "", fmt.Errorf("git rev-parse: %w", err)
-		}
-		lastCommitHash = strings.TrimSpace(string(revparseBytes))
-		u.commitIsh = lastCommitHash
-	} else {
-		submatches := describeRegexp.FindSubmatch(describeBytes)
-		if submatches == nil {
-			return "", fmt.Errorf("git describe output %q does not match expected format", string(describeBytes))
-		}
-		lastCommitHash = string(submatches[1])
-		u.commitIsh = strings.TrimSpace(string(describeBytes))
-	}
-
 	// Fetch full commit hash
 	cmd = exec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = gitdir
@@ -163,18 +128,10 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
 	}
 	fullCommitHash := strings.TrimSpace(string(fullCommitHashBytes))
+	lastCommitHash := shortCommitHash(fullCommitHash)
+	u.commitIsh = lastCommitHash
 
-	u.version = fmt.Sprintf("%sgit%s.%s",
-		mainVer,
-		time.Unix(lastCommitUnix, 0).UTC().Format("20060102"),
-		lastCommitHash)
-
-	if u.hasRelease {
-		// have tag: 1.2.3.20250101+git9f107c8
-		u.version = fmt.Sprintf("%s.%s+git%s", u.version, dateStr, lastCommitHash)
-	} else {
-		// without tag: 0.git20250101.96ee002 96ee0021ea0fb9174681b8004d8deba3c499d7f5
-		u.version = fmt.Sprintf("0+git%s.%s\n%%define commit_id %s", dateStr, lastCommitHash, fullCommitHash)
-	}
+	// Snapshot versions are based on the packaging date, not the commit date.
+	u.version = fmt.Sprintf("0+git%s.%s\n%%define commit_id %s", packagingDateString(), lastCommitHash, fullCommitHash)
 	return u.version, nil
 }
