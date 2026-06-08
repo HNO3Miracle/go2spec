@@ -260,11 +260,13 @@ func writeRPMProgramSubpackage(f *os.File, gopkg, openRuyiProgram, openRuyiSrc, 
 }
 
 func writeLicenseAndDocFiles(f *os.File, assetFiles specAssetFiles, includeDoc bool) {
-	for _, licenseFile := range assetFiles.licenseFiles {
-		fmt.Fprintf(f, "%%license %s\n", licenseFile)
-	}
 	if includeDoc && assetFiles.readmeFile != "" {
 		fmt.Fprintf(f, "%%doc %s\n", assetFiles.readmeFile)
+	}
+	licenseFiles := append([]string(nil), assetFiles.licenseFiles...)
+	sort.Strings(licenseFiles)
+	for _, licenseFile := range licenseFiles {
+		fmt.Fprintf(f, "%%license %s\n", licenseFile)
 	}
 }
 

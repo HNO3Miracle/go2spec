@@ -91,6 +91,30 @@ func TestCleanSpecAssetPath(t *testing.T) {
 	}
 }
 
+func TestWriteLicenseAndDocFilesOrdersDocBeforeSortedLicenses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "files")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	writeLicenseAndDocFiles(f, specAssetFiles{
+		licenseFiles: []string{"zLICENSE", "COPYING", "LICENSE"},
+		readmeFile:   "README.md",
+	}, true)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp file: %v", err)
+	}
+	want := "%doc README.md\n%license COPYING\n%license LICENSE\n%license zLICENSE\n"
+	if got := string(content); got != want {
+		t.Fatalf("writeLicenseAndDocFiles() = %q, want %q", got, want)
+	}
+}
+
 func TestSummaryFromReadme(t *testing.T) {
 	readme := `
 # Project
