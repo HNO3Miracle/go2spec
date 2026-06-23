@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -48,6 +50,7 @@ type upstream struct {
 	hasGodeps    bool     // whether the Godeps/_workspace directory exists
 	hasRelease   bool     // whether any release tags exist, for debian/watch
 	isRelease    bool     // whether what we end up packaging is a tagged release
+	sha256       string   // SHA256 checksum of the source tarball
 }
 
 var errUnsupportedHoster = errors.New("unsupported hoster")
@@ -122,6 +125,24 @@ func downloadFile(filename, url string) error {
 	}
 
 	return nil
+}
+
+// fetchText fetches the content of a URL and returns it as a string.
+// Returns an error if the HTTP status is not 200.
+func fetchText(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("http get: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("response: %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read body: %w", err)
+	}
+	return string(body), nil
 }
 
 // get downloads the source module into the provided GOPATH,
@@ -364,7 +385,131 @@ func (u *upstream) tarballFromHoster() error {
 
 	close(done)
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	u.sha256 = u.fetchChecksumFromReleasePage()
+	if u.sha256 == "" {
+		sum, err := fileSHA256(u.tarPath)
+		if err != nil {
+			log.Printf("INFO: Could not compute source tarball sha256: %v", err)
+		} else {
+			u.sha256 = sum
+		}
+	}
+
+	return nil
+}
+
+// fetchChecksumFromReleasePage fetches the GitHub/GitLab release page and
+// attempts to extract a SHA-256 checksum for the source tarball from the
+// page content. Some projects include the checksum in the release body
+// markdown, e.g. "sha256: <hex>" or "SHA256: <hex>".
+func (u *upstream) fetchChecksumFromReleasePage() string {
+	releaseURL := u.releasePageURL()
+	if releaseURL == "" {
+		return ""
+	}
+
+	log.Printf("Fetching release page %s for checksum", releaseURL)
+	content, err := fetchText(releaseURL)
+	if err != nil {
+		log.Printf("INFO: Could not fetch release page: %v", err)
+		return ""
+	}
+
+	return extractSHA256FromHTML(content, u.tag)
+}
+
+// releasePageURL constructs the release page URL for the current tag.
+// For GitHub: https://github.com/{owner}/{repo}/releases/tag/{tag}
+// For GitLab: https://gitlab.com/{owner}/{repo}/-/releases/{tag}
+func (u *upstream) releasePageURL() string {
+	repo := strings.TrimSuffix(u.repoURL, ".git")
+	if repo == "" || u.tag == "" {
+		return ""
+	}
+	repoU, err := url.Parse(repo)
+	if err != nil {
+		return ""
+	}
+
+	switch repoU.Host {
+	case "github.com":
+		return fmt.Sprintf("%s/releases/tag/%s", repo, u.tag)
+	case "gitlab.com", "salsa.debian.org":
+		return fmt.Sprintf("%s/-/releases/%s", repo, u.tag)
+	default:
+		return ""
+	}
+}
+
+// extractSHA256FromHTML searches HTML content for a SHA-256 checksum
+// associated with the tarball for the given tag. It looks for patterns like:
+//
+//	sha256: <64-hex-chars>
+//	SHA256: <64-hex-chars>
+//	sha256sum: <64-hex-chars>
+//
+// It also tries to match checksums near tarball-related filenames.
+func extractSHA256FromHTML(html, tag string) string {
+	lower := strings.ToLower(html)
+
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`sha-?256(?:sum)?[:\s]+([a-f0-9]{64})`),
+		regexp.MustCompile(`sha-?256(?:sum)?[:\s]*([a-f0-9]{64})`),
+	}
+
+	for _, re := range patterns {
+		if m := re.FindStringSubmatch(lower); len(m) > 1 && isValidSHA256(m[1]) {
+			return m[1]
+		}
+	}
+
+	// Fallback: look for a 64-char hex string near "tar" or "source" keywords
+	tarRe := regexp.MustCompile(`(?:tar|source)[^a-f0-9]{0,80}([a-f0-9]{64})`)
+	if m := tarRe.FindStringSubmatch(lower); len(m) > 1 {
+		if isValidSHA256(m[1]) {
+			return m[1]
+		}
+	}
+	revTarRe := regexp.MustCompile(`([a-f0-9]{64})[^a-f0-9]{0,80}(?:tar|source)`)
+	if m := revTarRe.FindStringSubmatch(lower); len(m) > 1 {
+		if isValidSHA256(m[1]) {
+			return m[1]
+		}
+	}
+
+	return ""
+}
+
+// isValidSHA256 reports whether s is a valid lowercase hexadecimal string
+// of exactly 64 characters (the length of a SHA-256 digest).
+func isValidSHA256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", fmt.Errorf("hash: %w", err)
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 func (u *upstream) tar(gopath, repo string) error {

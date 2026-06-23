@@ -66,6 +66,22 @@ func TestPkgsiteLicenseExpression(t *testing.T) {
 	}
 }
 
+func TestFileSHA256(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.tar.gz")
+	if err := os.WriteFile(path, []byte("source archive"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	got, err := fileSHA256(path)
+	if err != nil {
+		t.Fatalf("fileSHA256: %v", err)
+	}
+	want := "6ad189ace456a83fade855d5a647cd8ad9e7966da4404b1187218dca3d9eddaa"
+	if got != want {
+		t.Fatalf("fileSHA256() = %q, want %q", got, want)
+	}
+}
+
 func TestPkgsiteLicenseFilePaths(t *testing.T) {
 	licenses := []pkgsiteLicense{
 		{FilePath: "License", Types: []string{"MIT"}},

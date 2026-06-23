@@ -147,7 +147,11 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "Summary:        %s\n", description)
 	fmt.Fprintf(f, "License:        %s\n", license)
 	fmt.Fprintf(f, "URL:            %s\n", repoURL)
-	fmt.Fprintf(f, "#!RemoteAsset\n")
+	if u.sha256 != "" {
+		fmt.Fprintf(f, "#!RemoteAsset:  sha256:%s\n", u.sha256)
+	} else {
+		fmt.Fprintf(f, "#!RemoteAsset\n")
+	}
 	sourceModulePath := u.modulePath
 	if sourceModulePath == "" {
 		sourceModulePath = gopkg
