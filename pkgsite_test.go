@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -537,4 +541,56 @@ func runGit(t *testing.T, dir string, env []string, args ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
+}
+
+func TestPkgsiteGetJSONLogsRateLimitRetry(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	attempts := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"message":"slow down"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"path":"example.com/mod","version":"v1.2.3"}`))
+	}))
+	defer srv.Close()
+
+	oldBase := pkgsiteAPIBase
+	oldClient := pkgsiteHTTPClient
+	oldLog := pkgsiteRetryLog
+	t.Cleanup(func() {
+		pkgsiteAPIBase = oldBase
+		pkgsiteHTTPClient = oldClient
+		pkgsiteRetryLog = oldLog
+	})
+
+	pkgsiteAPIBase = srv.URL
+	pkgsiteHTTPClient = srv.Client()
+	pkgsiteRetryLog = func(msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, msg)
+	}
+
+	var mod pkgsiteModule
+	if err := pkgsiteGetJSON(context.Background(), "module", "example.com/mod", url.Values{}, &mod); err != nil {
+		t.Fatalf("pkgsiteGetJSON: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) == 0 {
+		t.Fatal("expected rate limit log message")
+	}
+	if !strings.Contains(logs[0], "example.com/mod limited on module") || !strings.Contains(logs[0], "retry 2/5 in 1s") {
+		t.Fatalf("unexpected log message: %q", logs[0])
+	}
 }

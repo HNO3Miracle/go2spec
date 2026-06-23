@@ -14,13 +14,14 @@ import (
 	"time"
 )
 
-const pkgsiteAPIBase = "https://pkg.go.dev/v1beta"
 const pkgsiteMaxResponseBytes = 20 << 20
 
 var (
+	pkgsiteAPIBase    = "https://pkg.go.dev/v1beta"
 	pkgsiteHTTPClient = http.DefaultClient
 	pkgsiteMu         sync.Mutex
 	pkgsiteInfoCache  = make(map[string]*pkgsiteInfo)
+	pkgsiteRetryLog   func(string)
 )
 
 type pkgsiteInfo struct {
@@ -105,8 +106,6 @@ func pkgsiteURL(endpoint, importPath string, values url.Values) string {
 	return u
 }
 
-// pkgsiteGetJSON performs a pkg.go.dev v1beta GET with up to 3 attempts and
-// linear backoff for transport errors, HTTP 429, and 5xx responses.
 func pkgsiteGetJSON(ctx context.Context, endpoint, importPath string, values url.Values, v any) error {
 	client := pkgsiteHTTPClient
 	if client == nil {
@@ -114,7 +113,7 @@ func pkgsiteGetJSON(ctx context.Context, endpoint, importPath string, values url
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pkgsiteURL(endpoint, importPath, values), nil)
 		if err != nil {
 			return fmt.Errorf("create pkgsite request: %w", err)
@@ -124,8 +123,13 @@ func pkgsiteGetJSON(ctx context.Context, endpoint, importPath string, values url
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("pkgsite request: %w", err)
-			if attempt < 3 {
-				time.Sleep(time.Duration(attempt) * time.Second)
+			if attempt < 5 {
+				backoff := time.Duration(attempt*2) * time.Second
+				reportPkgsiteRetry("  RETRY:  pkgsite %s %s request failed (%v), retry %d/5 in %s",
+					endpoint, importPath, err, attempt+1, backoff)
+				if err := sleepWithContext(ctx, backoff); err != nil {
+					return err
+				}
 				continue
 			}
 			return lastErr
@@ -148,8 +152,12 @@ func pkgsiteGetJSON(ctx context.Context, endpoint, importPath string, values url
 			apiErr.Code = resp.StatusCode
 			apiErr.Status = resp.Status
 			lastErr = &apiErr
-			if attempt < 3 && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
-				time.Sleep(time.Duration(attempt) * time.Second)
+			if attempt < 5 && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+				backoff := pkgsiteRetryBackoff(resp, attempt)
+				reportPkgsiteStatusRetry(endpoint, importPath, resp.StatusCode, &apiErr, attempt+1, backoff)
+				if err := sleepWithContext(ctx, backoff); err != nil {
+					return err
+				}
 				continue
 			}
 			return lastErr
@@ -161,6 +169,75 @@ func pkgsiteGetJSON(ctx context.Context, endpoint, importPath string, values url
 		return nil
 	}
 	return lastErr
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func pkgsiteRetryBackoff(resp *http.Response, attempt int) time.Duration {
+	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+		if retryAfter, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+			return retryAfter
+		}
+		return time.Duration(attempt*10) * time.Second
+	}
+	return time.Duration(attempt*5) * time.Second
+}
+
+func parseRetryAfter(v string) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if seconds, err := time.ParseDuration(v + "s"); err == nil && seconds > 0 {
+		return seconds, true
+	}
+	for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC850, time.ANSIC} {
+		t, err := time.Parse(layout, v)
+		if err == nil {
+			delay := time.Until(t)
+			if delay > 0 {
+				return delay, true
+			}
+			return time.Second, true
+		}
+	}
+	return 0, false
+}
+
+func reportPkgsiteRetry(format string, args ...any) {
+	if pkgsiteRetryLog != nil {
+		pkgsiteRetryLog(fmt.Sprintf(format, args...))
+	}
+}
+
+func reportPkgsiteStatusRetry(endpoint, importPath string, statusCode int, apiErr *pkgsiteAPIError, nextAttempt int, backoff time.Duration) {
+	switch statusCode {
+	case http.StatusTooManyRequests:
+		reportPkgsiteRetry("  RATE:   %s limited on %s, retry %d/5 in %s",
+			importPath, endpoint, nextAttempt, backoff)
+	default:
+		reportPkgsiteRetry("  RETRY:  %s %s HTTP %d, retry %d/5 in %s",
+			importPath, endpoint, statusCode, nextAttempt, backoff)
+	}
 }
 
 func getPkgsitePackage(ctx context.Context, gopkg, modulePath string) (pkgsitePackage, error) {
