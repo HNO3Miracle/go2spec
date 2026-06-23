@@ -16,6 +16,7 @@ Usage:
 
 Available Commands:
   pack        Package the Go modules into an RPM spec file
+  update      Check existing Go module spec files for updates
   help        Show this help message
 
 Use "go2spec [command] --help" for more information about a command.
@@ -46,6 +47,8 @@ func main() {
 		println("Executing 'pack' command...")
 		// Actual packing logic would go here
 		mainPack(args[1:], nil)
+	case "update":
+		os.Exit(mainUpdate(args[1:]))
 	default:
 		// Default to 'pack' command if no command is provided
 		println("No command provided. Defaulting to 'pack' command...")

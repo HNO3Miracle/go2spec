@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/sandrolain/httpcache v1.4.0
+	golang.org/x/mod v0.29.0
 	golang.org/x/net v0.47.0
 )
 
