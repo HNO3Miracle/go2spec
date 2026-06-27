@@ -114,7 +114,6 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// SPDX header
 	fmt.Fprintf(f, "# SPDX-FileCopyrightText: (C) 2026 Institute of Software, Chinese Academy of Sciences (ISCAS)\n")
 	fmt.Fprintf(f, "# SPDX-FileCopyrightText: (C) 2026 openRuyi Project Contributors\n")
-	fmt.Fprintf(f, "# SPDX-FileContributor: \n")
 	fmt.Fprintf(f, "#\n")
 	fmt.Fprintf(f, "# SPDX-License-Identifier: MulanPSL-2.0\n")
 	fmt.Fprintf(f, "\n")
