@@ -122,13 +122,8 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	fmt.Fprintf(f, "%%define _name           %s\n", upstreamName)
 	fmt.Fprintf(f, "%%define go_import_path  %s\n", gopkg)
 
-	// If pkgVersionFromGit embedded a commit_id define in u.version, extract and write it here
-	commitRe := regexp.MustCompile(`%define\s+commit_id\s+([0-9a-fA-F]+)`)
-	if m := commitRe.FindStringSubmatch(u.version); m != nil {
-		fmt.Fprintf(f, "%%define commit_id %s\n", m[1])
-		// Remove the embedded %define line from version so it doesn't get written to Version: field
-		version = commitRe.ReplaceAllString(version, "")
-		version = strings.TrimSpace(version)
+	if u.commitID != "" {
+		fmt.Fprintf(f, "%%define commit_id %s\n", u.commitID)
 	}
 	fmt.Fprintf(f, "\n")
 

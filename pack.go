@@ -38,6 +38,7 @@ type upstream struct {
 	tarPath      string   // path to the downloaded or generated orig tarball tempfile
 	compression  string   // compression method, either "gz" or "xz"
 	version      string   // upstream version number, e.g. 0.0~git20180204.1d24609
+	commitID     string   // full commit hash for commit-pinned snapshot builds
 	tag          string   // Latest upstream tag, if any
 	commitIsh    string   // commit-ish corresponding to upstream version to be packaged
 	remote       string   // git remote, set to short hostname if upstream git history is included
@@ -327,7 +328,7 @@ func moduleUsesRepoSubdir(modulePath, repoURL string) bool {
 // the upstream version maps cleanly to %{commit_id} or %{version}.
 func (u *upstream) sourceRefForSpec() (string, error) {
 	ref := u.tag
-	if strings.Contains(u.version, "commit_id") {
+	if u.commitID != "" {
 		ref = "%{commit_id}"
 	} else if u.isRelease && u.tag == "v"+u.version {
 		ref = "v%{version}"

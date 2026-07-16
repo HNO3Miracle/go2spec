@@ -38,9 +38,8 @@ func shortCommitHash(hash string) string {
 
 // pkgVersionFromGit determines the actual version to be packaged
 // from the git repository status and user preference.
-// Besides returning the upstream version, the "upstream" struct
-// struct fields u.version, u.commitIsh, u.hasRelease and u.isRelease
-// are also set.
+// Besides returning the upstream version, the "upstream" struct fields
+// u.version, u.commitID, u.commitIsh, u.hasRelease and u.isRelease are also set.
 // `preferredRev` should be empty if there are no user preferences.
 // TODO: also support other VCS
 func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePrerelease bool) (string, error) {
@@ -129,9 +128,10 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 	}
 	fullCommitHash := strings.TrimSpace(string(fullCommitHashBytes))
 	lastCommitHash := shortCommitHash(fullCommitHash)
+	u.commitID = fullCommitHash
 	u.commitIsh = lastCommitHash
 
 	// Snapshot versions are based on the packaging date, not the commit date.
-	u.version = fmt.Sprintf("0+git%s.%s\n%%define commit_id %s", packagingDateString(), lastCommitHash, fullCommitHash)
+	u.version = fmt.Sprintf("0+git%s.%s", packagingDateString(), lastCommitHash)
 	return u.version, nil
 }

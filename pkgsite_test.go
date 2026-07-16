@@ -428,8 +428,9 @@ func TestGetPkgsitePackageRetriesAmbiguousPathWithLongestModule(t *testing.T) {
 
 func TestSourceURLForSpecUsesCommitIDMacro(t *testing.T) {
 	u := upstream{
-		repoURL: "https://github.com/example/project",
-		version: "0+git20260522.abcdef\n%define commit_id 0123456789abcdef",
+		repoURL:  "https://github.com/example/project",
+		version:  "0+git20260522.abcdef",
+		commitID: "0123456789abcdef",
 	}
 	got, err := u.sourceURLForSpec("github.com/example/project")
 	if err != nil {
@@ -494,8 +495,9 @@ func TestSourceURLForSpecUsesModuleProxyForRepoSubmodule(t *testing.T) {
 
 func TestSourceURLForSpecRejectsCommitIDForRepoSubmodule(t *testing.T) {
 	u := upstream{
-		repoURL: "https://github.com/charmbracelet/x",
-		version: "0+git20260522.abcdef\n%define commit_id abcdef1234567890",
+		repoURL:  "https://github.com/charmbracelet/x",
+		version:  "0+git20260522.abcdef",
+		commitID: "abcdef1234567890",
 	}
 	_, err := u.sourceURLForSpec("github.com/charmbracelet/x/ansi")
 	if err == nil {
@@ -529,7 +531,7 @@ func TestPkgVersionFromGitUsesPackagingDateAndSevenCharHash(t *testing.T) {
 	}, "commit", "-m", "initial")
 
 	fullHash := strings.TrimSpace(runGit(t, dir, nil, "rev-parse", "HEAD"))
-	want := "0+git20250808." + fullHash[:7] + "\n%define commit_id " + fullHash
+	want := "0+git20250808." + fullHash[:7]
 
 	u := upstream{}
 	got, err := pkgVersionFromGit(dir, &u, "", false)
@@ -538,6 +540,12 @@ func TestPkgVersionFromGitUsesPackagingDateAndSevenCharHash(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("pkgVersionFromGit() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\n") || strings.Contains(got, "commit_id") {
+		t.Fatalf("pkgVersionFromGit() returned metadata in version: %q", got)
+	}
+	if u.commitID != fullHash {
+		t.Fatalf("commitID = %q, want %q", u.commitID, fullHash)
 	}
 	if strings.Contains(got, "19990102") {
 		t.Fatalf("pkgVersionFromGit() used commit date: %q", got)
