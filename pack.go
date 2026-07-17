@@ -960,10 +960,10 @@ func mainPack(args []string, usage func()) {
 		flagSet.Usage = usage
 	} else {
 		flagSet.Usage = func() {
-			fmt.Fprintf(os.Stderr, "Usage: %s [pack] [FLAG]... <go-package-importpath>\n", os.Args[0])
-			fmt.Fprintf(os.Stderr, "Example: %s pack golang.org/x/oauth2\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "Usage: %s [pack] [FLAG]... <go-package-importpath>[@revision]...\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "Example: %s pack golang.org/x/oauth2@v0.30.0 github.com/pquerna/cachecontrol@v0.2.0\n", os.Args[0])
 			fmt.Fprintf(os.Stderr, "\n")
-			fmt.Fprintf(os.Stderr, "\"%s pack\" downloads the specified Go package from the Internet,\nand creates new files and directories in the current working directory.\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "\"%s pack\" downloads the specified Go packages from the Internet,\nand creates new files and directories in the current working directory.\n", os.Args[0])
 			fmt.Fprintf(os.Stderr, "\n")
 			fmt.Fprintf(os.Stderr, "Flags:\n")
 			flagSet.PrintDefaults()
@@ -974,7 +974,7 @@ func mainPack(args []string, usage func()) {
 	flagSet.StringVar(&gitRevision,
 		"git_revision",
 		"",
-		"git revision (see gitrevisions(7)) of the specified Go package\n"+
+		"git revision (see gitrevisions(7)) for package arguments without @revision\n"+
 			"to check out, defaulting to the default behavior of git clone.\n"+
 			"Useful in case you do not want to package e.g. current HEAD.")
 
@@ -1027,28 +1027,6 @@ func mainPack(args []string, usage func()) {
 	}
 
 	gitRevision = strings.TrimSpace(gitRevision)
-	gopkg := flagSet.Arg(0)
-
-	// Remove URL scheme if present (https://, http://, git://, etc.)
-	gopkg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(gopkg, "https://"), "http://"), "git://")
-
-	// Verify the provided argument using the official pkg.go.dev API. Keep the
-	// requested path for naming and go_import_path; use the module path only for
-	// source checkout and tarball generation.
-	info, err := getPkgsiteInfo(context.TODO(), gopkg)
-	if err != nil {
-		log.Fatalf("Verifying arguments: %v — did you specify a Go package import path?", err)
-	}
-	sourceGopkg := sourceImportPathForPackage(gopkg, info)
-	if sourceGopkg != gopkg {
-		log.Printf("Using module root %q as source checkout for specified import path %q", sourceGopkg, gopkg)
-	}
-
-	// Set default source and binary package names.
-	openRuyiSrc := nameFromGopkg(gopkg, typeLibrary, customProgPkgName, allowUnknownHoster)
-	openRuyiLib := openRuyiSrc
-	openRuyiProgram := nameFromGopkg(gopkg, typeProgram, customProgPkgName, allowUnknownHoster)
-
 	var pkgType packageType
 
 	switch strings.TrimSpace(pkgTypeString) {
@@ -1068,6 +1046,59 @@ func mainPack(args []string, usage func()) {
 	default:
 		log.Fatalf("-type=%q not recognized, aborting\n", pkgTypeString)
 	}
+
+	for _, arg := range flagSet.Args() {
+		gopkg, revision, err := parsePackArg(arg, gitRevision)
+		if err != nil {
+			log.Fatalf("parse package argument %q: %v", arg, err)
+		}
+		packPackage(gopkg, revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
+	}
+}
+
+func parsePackArg(arg, defaultRevision string) (string, string, error) {
+	arg = strings.TrimSpace(arg)
+	defaultRevision = strings.TrimSpace(defaultRevision)
+	if arg == "" {
+		return "", "", fmt.Errorf("package import path is empty")
+	}
+	if strings.HasPrefix(arg, "-") {
+		return "", "", fmt.Errorf("-git_revision must be specified before package arguments")
+	}
+	if at := strings.LastIndex(arg, "@"); at >= 0 {
+		revision := strings.TrimSpace(arg[at+1:])
+		if revision == "" {
+			return "", "", fmt.Errorf("package revision is empty")
+		}
+		path := strings.TrimSpace(arg[:at])
+		if path == "" {
+			return "", "", fmt.Errorf("package import path is empty")
+		}
+		return path, revision, nil
+	}
+	return arg, defaultRevision, nil
+}
+
+func packPackage(gopkg, gitRevision string, forcePrerelease bool, pkgType packageType, customProgPkgName string, allowUnknownHoster bool) {
+	// Remove URL scheme if present (https://, http://, git://, etc.)
+	gopkg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(gopkg, "https://"), "http://"), "git://")
+
+	// Verify the provided argument using the official pkg.go.dev API. Keep the
+	// requested path for naming and go_import_path; use the module path only for
+	// source checkout and tarball generation.
+	info, err := getPkgsiteInfo(context.TODO(), gopkg)
+	if err != nil {
+		log.Fatalf("Verifying arguments: %v — did you specify a Go package import path?", err)
+	}
+	sourceGopkg := sourceImportPathForPackage(gopkg, info)
+	if sourceGopkg != gopkg {
+		log.Printf("Using module root %q as source checkout for specified import path %q", sourceGopkg, gopkg)
+	}
+
+	// Set default source and binary package names.
+	openRuyiSrc := nameFromGopkg(gopkg, typeLibrary, customProgPkgName, allowUnknownHoster)
+	openRuyiLib := openRuyiSrc
+	openRuyiProgram := nameFromGopkg(gopkg, typeProgram, customProgPkgName, allowUnknownHoster)
 
 	if pkgType != typeGuess {
 		openRuyiSrc = nameFromGopkg(gopkg, pkgType, customProgPkgName, allowUnknownHoster)

@@ -563,6 +563,114 @@ func TestPkgVersionFromGitUsesPackagingDateAndSevenCharHash(t *testing.T) {
 	}
 }
 
+func TestPkgVersionFromGitAcceptsUnprefixedSemverPreferredRevision(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, nil, "init")
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/project\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	runGit(t, dir, nil, "add", "go.mod")
+	runGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.invalid",
+	}, "commit", "-m", "initial")
+	runGit(t, dir, nil, "tag", "v1.2.0")
+
+	u := upstream{}
+	got, err := pkgVersionFromGit(dir, &u, "1.2.0", false)
+	if err != nil {
+		t.Fatalf("pkgVersionFromGit() returned error: %v", err)
+	}
+	if got != "1.2.0" {
+		t.Fatalf("pkgVersionFromGit() = %q, want %q", got, "1.2.0")
+	}
+	if u.tag != "v1.2.0" || !u.isRelease {
+		t.Fatalf("tag = %q, isRelease = %v, want v1.2.0 release", u.tag, u.isRelease)
+	}
+}
+
+func TestParsePackArg(t *testing.T) {
+	tests := []struct {
+		name            string
+		arg             string
+		defaultRevision string
+		wantPath        string
+		wantRevision    string
+		wantErr         bool
+	}{
+		{
+			name:         "explicit revision",
+			arg:          "github.com/a/pkg@v1.2.3",
+			wantPath:     "github.com/a/pkg",
+			wantRevision: "v1.2.3",
+		},
+		{
+			name:         "explicit unprefixed semver revision",
+			arg:          "github.com/a/pkg@1.2.3",
+			wantPath:     "github.com/a/pkg",
+			wantRevision: "1.2.3",
+		},
+		{
+			name:            "uses default revision",
+			arg:             "github.com/a/pkg",
+			defaultRevision: "v0.9.0",
+			wantPath:        "github.com/a/pkg",
+			wantRevision:    "v0.9.0",
+		},
+		{
+			name:     "keeps empty default revision",
+			arg:      "github.com/a/pkg",
+			wantPath: "github.com/a/pkg",
+		},
+		{
+			name:         "semantic import version with explicit revision",
+			arg:          "github.com/a/pkg/v2@v2.1.0",
+			wantPath:     "github.com/a/pkg/v2",
+			wantRevision: "v2.1.0",
+		},
+		{
+			name:    "rejects empty explicit revision",
+			arg:     "github.com/a/pkg@",
+			wantErr: true,
+		},
+		{
+			name:    "rejects empty import path",
+			arg:     "@v1.2.3",
+			wantErr: true,
+		},
+		{
+			name:    "rejects misplaced flag",
+			arg:     "-list",
+			wantErr: true,
+		},
+		{
+			name:    "rejects misplaced git revision assignment",
+			arg:     "-git_revision=v1.2.3",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, gotRevision, err := parsePackArg(tt.arg, tt.defaultRevision)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePackArg() returned error: %v", err)
+			}
+			if gotPath != tt.wantPath || gotRevision != tt.wantRevision {
+				t.Fatalf("parsePackArg() = (%q, %q), want (%q, %q)", gotPath, gotRevision, tt.wantPath, tt.wantRevision)
+			}
+		})
+	}
+}
+
 func runGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

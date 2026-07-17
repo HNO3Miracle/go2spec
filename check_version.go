@@ -36,6 +36,18 @@ func shortCommitHash(hash string) string {
 	return hash
 }
 
+func preferredRevisionCandidates(preferredRev string) []string {
+	preferredRev = strings.TrimSpace(preferredRev)
+	if preferredRev == "" {
+		return nil
+	}
+	candidates := []string{preferredRev}
+	if !strings.HasPrefix(preferredRev, "v") && semverRegexp.MatchString("v"+preferredRev) {
+		candidates = append(candidates, "v"+preferredRev)
+	}
+	return candidates
+}
+
 // pkgVersionFromGit determines the actual version to be packaged
 // from the git repository status and user preference.
 // Besides returning the upstream version, the "upstream" struct fields
@@ -49,11 +61,12 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 	var cmd *exec.Cmd // the temporary shell commands we execute
 
 	// If the user specifies a valid tag as the preferred revision, that tag should be used without additional heuristics.
-	if preferredRev != "" {
-		cmd = exec.Command("git", "tag", "--list", preferredRev)
+	for _, candidate := range preferredRevisionCandidates(preferredRev) {
+		cmd = exec.Command("git", "tag", "--list", candidate)
 		cmd.Dir = gitdir
-		if out, err := cmd.Output(); err == nil && slices.Contains(strings.Fields(string(out)), preferredRev) {
-			latestTag = preferredRev
+		if out, err := cmd.Output(); err == nil && slices.Contains(strings.Fields(string(out)), candidate) {
+			latestTag = candidate
+			break
 		}
 	}
 
