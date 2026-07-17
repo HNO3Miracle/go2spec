@@ -358,10 +358,7 @@ func pkgsiteLicenseExpression(licenses []pkgsiteLicense) string {
 			types = append(types, typ)
 		}
 		sort.Strings(types)
-		group := types[0]
-		if len(types) > 1 {
-			group = "(" + strings.Join(types, " OR ") + ")"
-		}
+		group := strings.Join(types, " OR ")
 		seenGroups[group] = true
 	}
 	if len(seenGroups) == 0 {
@@ -373,5 +370,12 @@ func pkgsiteLicenseExpression(licenses []pkgsiteLicense) string {
 		groups = append(groups, group)
 	}
 	sort.Strings(groups)
+	if len(groups) > 1 {
+		for i, group := range groups {
+			if strings.Contains(group, " OR ") {
+				groups[i] = "(" + group + ")"
+			}
+		}
+	}
 	return strings.Join(groups, " AND ")
 }

@@ -48,7 +48,15 @@ func TestPkgsiteLicenseExpression(t *testing.T) {
 			licenses: []pkgsiteLicense{
 				{FilePath: "LICENSE", Types: []string{"MIT", "Apache-2.0"}},
 			},
-			want: "(Apache-2.0 OR MIT)",
+			want: "Apache-2.0 OR MIT",
+		},
+		{
+			name: "parenthesizes OR group when joined with AND",
+			licenses: []pkgsiteLicense{
+				{FilePath: "LICENSE", Types: []string{"MIT", "Apache-2.0"}},
+				{FilePath: "COPYING", Types: []string{"BSD-3-Clause"}},
+			},
+			want: "(Apache-2.0 OR MIT) AND BSD-3-Clause",
 		},
 		{
 			name:     "uses TODO when pkgsite has no SPDX type",
