@@ -196,17 +196,18 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 		log.Fatalf("Invalid pkgType %d in writeRPMSpec(), aborting", pkgType)
 	}
 
-	fmt.Fprintf(f, "\n")
+	if pkgType != typeLibrary {
+		fmt.Fprintf(f, "\n")
+	}
 	fmt.Fprintf(f, "%%description\n")
-	fmt.Fprintf(f, "%s\n", longdescription)
-	fmt.Fprintf(f, "\n")
+	fmt.Fprintf(f, "%s\n\n", strings.TrimRight(longdescription, "\n"))
 
 	// %files
 	writeRPMFilesSection(f, openRuyiSrc, openRuyiLib, openRuyiProgram, pkgType, assetFiles)
 
 	// %changelog
 	fmt.Fprintf(f, "%%changelog\n")
-	fmt.Fprintf(f, "%%{?autochangelog}\n\n")
+	fmt.Fprintf(f, "%%autochangelog\n\n")
 
 	return nil
 }
