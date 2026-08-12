@@ -1063,10 +1063,17 @@ func mainPack(args []string, usage func()) {
 		log.Fatalf("-type=%q not recognized, aborting\n", pkgTypeString)
 	}
 
+	// Now we collect all package's info into packRequest structs
 	requests, err := collectPackRequests(flagSet.Args(), listFile, gitRevision)
 	if err != nil {
 		log.Fatalf("parse package list: %v", err)
 	}
+
+	// Now we verify that all packages are valid
+	if err := preflightPackRequests(context.TODO(), requests, pkgType, customProgPkgName, allowUnknownHoster); err != nil {
+		log.Fatalf("preflight package list: %v", err)
+	}
+
 	for _, req := range requests {
 		packPackage(req.gopkg, req.revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
 	}
@@ -1128,6 +1135,54 @@ func parsePackListFile(filename string) ([]packRequest, error) {
 		})
 	}
 	return requests, nil
+}
+
+func preflightPackRequests(ctx context.Context, requests []packRequest, pkgType packageType, customProgPkgName string, allowUnknownHoster bool) error {
+	seenOutputDirs := make(map[string]string)
+	for _, req := range requests {
+		gopkg := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(req.gopkg, "https://"), "http://"), "git://")
+		info, err := getPkgsiteInfo(ctx, gopkg)
+		if err != nil {
+			return fmt.Errorf("%q: %w", req.arg, err)
+		}
+		if repoURL := gitCloneURLFromRepoURL(info.Module.RepoURL); repoURL == "" {
+			return fmt.Errorf("%q: no repository URL", req.arg)
+		}
+		if req.revision != "" && strings.HasPrefix(req.revision, "v") {
+			if _, err := getPkgsiteModule(ctx, info.Module.Path, req.revision); err != nil {
+				return fmt.Errorf("%q@%s: %w", req.arg, req.revision, err)
+			}
+		}
+
+		effectivePkgType := pkgType
+		if effectivePkgType == typeGuess {
+			effectivePkgType = typeLibrary
+			if info.Package.Name == "main" {
+				effectivePkgType = typeProgram
+			}
+		}
+		dir := nameFromGopkg(gopkg, effectivePkgType, customProgPkgName, allowUnknownHoster)
+		if previous, ok := seenOutputDirs[dir]; ok {
+			return fmt.Errorf("%q and %q use %q", previous, req.arg, dir)
+		}
+		seenOutputDirs[dir] = req.arg
+		dirInfo, err := os.Stat(dir)
+		if err == nil {
+			if !dirInfo.IsDir() {
+				return fmt.Errorf("%q: %q is not a directory", req.arg, dir)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return fmt.Errorf("%q: read %q: %w", req.arg, dir, err)
+			}
+			if len(entries) != 0 {
+				return fmt.Errorf("%q: %q is non empty", req.arg, dir)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("%q: stat %q: %w", req.arg, dir, err)
+		}
+	}
+	return nil
 }
 
 func parsePackArg(arg, defaultRevision string) (string, string, error) {
