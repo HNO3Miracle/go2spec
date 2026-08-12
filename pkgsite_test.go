@@ -671,6 +671,120 @@ func TestParsePackArg(t *testing.T) {
 	}
 }
 
+func TestParsePackListFile(t *testing.T) {
+	dir := t.TempDir()
+	listPath := filepath.Join(dir, "packages.go.mod")
+	content := strings.Join([]string{
+		"module example.com/package-list",
+		"",
+		"go 1.25",
+		"",
+		"require (",
+		"	github.com/a/pkg v1.2.3",
+		"	github.com/b/tool v0.4.5 // indirect",
+		")",
+		"",
+		"require golang.org/x/text v0.31.0",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	got, err := parsePackListFile(listPath)
+	if err != nil {
+		t.Fatalf("parsePackListFile() returned error: %v", err)
+	}
+	want := []packRequest{
+		{arg: "github.com/a/pkg@v1.2.3", gopkg: "github.com/a/pkg", revision: "v1.2.3"},
+		{arg: "github.com/b/tool@v0.4.5", gopkg: "github.com/b/tool", revision: "v0.4.5"},
+		{arg: "golang.org/x/text@v0.31.0", gopkg: "golang.org/x/text", revision: "v0.31.0"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len(parsePackListFile()) = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("parsePackListFile()[%d] = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParsePackListFileRejectsUnsupportedDirectives(t *testing.T) {
+	dir := t.TempDir()
+	listPath := filepath.Join(dir, "packages.go.mod")
+	content := strings.Join([]string{
+		"module example.com/package-list",
+		"",
+		"go 1.25",
+		"require github.com/a/pkg v1.2.3",
+		"replace github.com/a/pkg => ./pkg",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	_, err := parsePackListFile(listPath)
+	if err == nil {
+		t.Fatal("expected parsePackListFile() to reject replace directives")
+	}
+	if !strings.Contains(err.Error(), "unsupported directives") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePackListFileRejectsEmptyRequireList(t *testing.T) {
+	dir := t.TempDir()
+	listPath := filepath.Join(dir, "packages.go.mod")
+	content := strings.Join([]string{
+		"module example.com/package-list",
+		"",
+		"go 1.25",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	_, err := parsePackListFile(listPath)
+	if err == nil {
+		t.Fatal("expected parsePackListFile() to reject an empty require list")
+	}
+	if !strings.Contains(err.Error(), "no require directives") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCollectPackRequestsUsesListFile(t *testing.T) {
+	dir := t.TempDir()
+	listPath := filepath.Join(dir, "packages.go.mod")
+	content := strings.Join([]string{
+		"module example.com/package-list",
+		"",
+		"go 1.25",
+		"require github.com/a/pkg v1.2.3",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	got, err := collectPackRequests(nil, listPath, "v9.9.9")
+	if err != nil {
+		t.Fatalf("collectPackRequests() returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].gopkg != "github.com/a/pkg" || got[0].revision != "v1.2.3" {
+		t.Fatalf("collectPackRequests() = %#v, want github.com/a/pkg@v1.2.3", got)
+	}
+}
+
+func TestCollectPackRequestsRejectsListAndPackages(t *testing.T) {
+	_, err := collectPackRequests([]string{"github.com/a/pkg@v1.2.3"}, "packages.go.mod", "")
+	if err == nil {
+		t.Fatal("expected collectPackRequests() to reject -list combined with package arguments")
+	}
+	if !strings.Contains(err.Error(), "-list cannot be combined") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func runGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

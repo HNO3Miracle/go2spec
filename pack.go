@@ -8,6 +8,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 	"golang.org/x/net/publicsuffix"
 	"io"
 	"log"
@@ -55,6 +57,12 @@ type upstream struct {
 }
 
 var errUnsupportedHoster = errors.New("unsupported hoster")
+
+type packRequest struct {
+	arg      string
+	gopkg    string
+	revision string
+}
 
 func passthroughEnv() []string {
 	var relevantVariables = []string{
@@ -961,7 +969,9 @@ func mainPack(args []string, usage func()) {
 	} else {
 		flagSet.Usage = func() {
 			fmt.Fprintf(os.Stderr, "Usage: %s [pack] [FLAG]... <go-package-importpath>[@revision]...\n", os.Args[0])
-			fmt.Fprintf(os.Stderr, "Example: %s pack golang.org/x/oauth2@v0.30.0 github.com/pquerna/cachecontrol@v0.2.0\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "       %s [pack] [FLAG]... -list <go.mod>\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "Example: %s pack golang.org/x/oauth2@v0.30.0\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "Example: %s pack -list packages.go.mod\n", os.Args[0])
 			fmt.Fprintf(os.Stderr, "\n")
 			fmt.Fprintf(os.Stderr, "\"%s pack\" downloads the specified Go packages from the Internet,\nand creates new files and directories in the current working directory.\n", os.Args[0])
 			fmt.Fprintf(os.Stderr, "\n")
@@ -977,6 +987,12 @@ func mainPack(args []string, usage func()) {
 		"git revision (see gitrevisions(7)) for package arguments without @revision\n"+
 			"to check out, defaulting to the default behavior of git clone.\n"+
 			"Useful in case you do not want to package e.g. current HEAD.")
+
+	var listFile string
+	flagSet.StringVar(&listFile,
+		"list",
+		"",
+		"Read packages to pack from the require directives of a go.mod file")
 
 	var forcePrerelease bool
 	flagSet.BoolVar(&forcePrerelease,
@@ -1020,8 +1036,8 @@ func mainPack(args []string, usage func()) {
 		log.Fatalf("parse args: %v", err)
 	}
 
-	// Check for required positional argument
-	if flagSet.NArg() < 1 {
+	// A package argument or a package-list file is required.
+	if flagSet.NArg() < 1 && listFile == "" {
 		flagSet.Usage()
 		os.Exit(1)
 	}
@@ -1047,13 +1063,71 @@ func mainPack(args []string, usage func()) {
 		log.Fatalf("-type=%q not recognized, aborting\n", pkgTypeString)
 	}
 
-	for _, arg := range flagSet.Args() {
-		gopkg, revision, err := parsePackArg(arg, gitRevision)
-		if err != nil {
-			log.Fatalf("parse package argument %q: %v", arg, err)
-		}
-		packPackage(gopkg, revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
+	requests, err := collectPackRequests(flagSet.Args(), listFile, gitRevision)
+	if err != nil {
+		log.Fatalf("parse package list: %v", err)
 	}
+	for _, req := range requests {
+		packPackage(req.gopkg, req.revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
+	}
+}
+
+func collectPackRequests(args []string, listFile, defaultRevision string) ([]packRequest, error) {
+	// If a list file is specified
+	// for example, "pack -list packages.go.mod"
+	if listFile != "" {
+		if len(args) != 0 {
+			return nil, fmt.Errorf("-list cannot be combined with package arguments")
+		}
+		return parsePackListFile(listFile)
+	}
+
+	// if no list file is specified
+	// for example, "pack golang.org/x/a@v0.30.0 golang.org/x/b@v0.7.0"
+	var requests []packRequest
+	for _, arg := range args {
+		gopkg, revision, err := parsePackArg(arg, defaultRevision)
+		if err != nil {
+			return nil, fmt.Errorf("parse package argument %q: %w", arg, err)
+		}
+		requests = append(requests, packRequest{arg: arg, gopkg: gopkg, revision: revision})
+	}
+	return requests, nil
+}
+
+func parsePackListFile(filename string) ([]packRequest, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("read %q: %w", filename, err)
+	}
+	f, err := modfile.Parse(filename, data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parse %q: %w", filename, err)
+	}
+
+	// TODO: Support go.mod directives that affect module version selection,
+	// such as replace, exclude, and retract, before accepting them in pack lists.
+	if len(f.Replace) > 0 || len(f.Exclude) > 0 || len(f.Retract) > 0 {
+		return nil, fmt.Errorf("%q contains unsupported directives", filename)
+	}
+	if len(f.Require) == 0 {
+		return nil, fmt.Errorf("%q contains no require directives", filename)
+	}
+
+	requests := make([]packRequest, 0, len(f.Require))
+	for _, require := range f.Require {
+		// TODO: Decide whether indirect requirements should be included in pack lists.
+		if err := module.Check(require.Mod.Path, require.Mod.Version); err != nil {
+			return nil, fmt.Errorf("invalid require %q %q: %w",
+				require.Mod.Path, require.Mod.Version, err)
+		}
+		requests = append(requests, packRequest{
+			arg:      require.Mod.Path + "@" + require.Mod.Version,
+			gopkg:    require.Mod.Path,
+			revision: require.Mod.Version,
+		})
+	}
+	return requests, nil
 }
 
 func parsePackArg(arg, defaultRevision string) (string, string, error) {
