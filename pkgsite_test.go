@@ -591,6 +591,35 @@ func TestPkgVersionFromGitAcceptsUnprefixedSemverPreferredRevision(t *testing.T)
 	}
 }
 
+func TestPkgVersionFromGitAcceptsPseudoVersion(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, nil, "init")
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/project\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	runGit(t, dir, nil, "add", "go.mod")
+	runGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.invalid",
+	}, "commit", "-m", "initial")
+	fullHash := strings.TrimSpace(runGit(t, dir, nil, "rev-parse", "HEAD"))
+	pseudoVersion := "v0.0.0-20260722051018-" + fullHash[:12]
+
+	u := upstream{}
+	got, err := pkgVersionFromGit(dir, &u, pseudoVersion, false)
+	if err != nil {
+		t.Fatalf("pkgVersionFromGit() returned error: %v", err)
+	}
+	if got != strings.TrimPrefix(pseudoVersion, "v") {
+		t.Fatalf("pkgVersionFromGit() = %q, want %q", got, strings.TrimPrefix(pseudoVersion, "v"))
+	}
+	if u.commitIsh != fullHash[:12] || u.isRelease {
+		t.Fatalf("commitIsh = %q, isRelease = %v, want %q and false", u.commitIsh, u.isRelease, fullHash[:12])
+	}
+}
+
 func TestParsePackArg(t *testing.T) {
 	tests := []struct {
 		name            string

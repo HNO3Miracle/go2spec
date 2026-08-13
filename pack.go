@@ -186,13 +186,20 @@ func (u *upstream) get(gopath, sourceRepo, requestedPath, rev string) error {
 	}
 
 	if rev != "" {
-		cmd = exec.Command("git", "-c", "advice.detachedHead=false", "checkout", rev)
+		checkoutRev := rev
+		if module.IsPseudoVersion(rev) {
+			checkoutRev, err = module.PseudoVersionRev(rev)
+			if err != nil {
+				return fmt.Errorf("parse pseudo-version %q: %w", rev, err)
+			}
+		}
+		cmd = exec.Command("git", "-c", "advice.detachedHead=false", "checkout", checkoutRev)
 		cmd.Dir = dir
 		cmd.Env = passthroughEnv()
 		cmd.Stderr = os.Stderr
 		log.Println("get: Running", cmd, "in", cmd.Dir)
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("git checkout %q: %w", rev, err)
+			return fmt.Errorf("git checkout %q: %w", checkoutRev, err)
 		}
 	}
 	return nil
@@ -1148,7 +1155,7 @@ func preflightPackRequests(ctx context.Context, requests []packRequest, pkgType 
 		if repoURL := gitCloneURLFromRepoURL(info.Module.RepoURL); repoURL == "" {
 			return fmt.Errorf("%q: no repository URL", req.arg)
 		}
-		if req.revision != "" && strings.HasPrefix(req.revision, "v") {
+		if req.revision != "" && strings.HasPrefix(req.revision, "v") && !module.IsPseudoVersion(req.revision) {
 			if _, err := getPkgsiteModule(ctx, info.Module.Path, req.revision); err != nil {
 				return fmt.Errorf("%q@%s: %w", req.arg, req.revision, err)
 			}

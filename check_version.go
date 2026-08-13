@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/mod/module"
 	"log"
 	"os/exec"
 	"regexp"
@@ -59,6 +60,22 @@ func pkgVersionFromGit(gitdir string, u *upstream, preferredRev string, forcePre
 	var commitsAhead int
 
 	var cmd *exec.Cmd // the temporary shell commands we execute
+	preferredRev = strings.TrimSpace(preferredRev)
+
+	if module.IsPseudoVersion(preferredRev) {
+		commit, err := module.PseudoVersionRev(preferredRev)
+		if err != nil {
+			return "", fmt.Errorf("parse pseudo-version %q: %w", preferredRev, err)
+		}
+		cmd = exec.Command("git", "rev-parse", "--verify", commit+"^{commit}")
+		cmd.Dir = gitdir
+		if _, err := cmd.Output(); err != nil {
+			return "", fmt.Errorf("git revision %q: %w", commit, err)
+		}
+		u.commitIsh = commit
+		u.version = strings.TrimPrefix(preferredRev, "v")
+		return u.version, nil
+	}
 
 	// If the user specifies a valid tag as the preferred revision, that tag should be used without additional heuristics.
 	for _, candidate := range preferredRevisionCandidates(preferredRev) {
