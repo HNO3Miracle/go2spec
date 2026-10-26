@@ -41,6 +41,17 @@ go-golang-x-net/go-golang-x-net.spec
 go-golang-x-net_<version>.orig.tar.<gz|xz>
 ```
 
+### 将多个 module 的独立版本合成一个 RPM
+
+使用 `pack -combine <import-root> -package_name <name> -package_version <version>`，
+为每个位置参数显式指定 `module@version`，生成**一个 library 源码 RPM**，内含各自
+校验过的源码 ZIP 和 `go_submodules` 版本表。不加 `-combine` 时，原有多参数分别
+打包的语义不变。
+
+具体用法、输出和首版限制见 [pack 文档](docs/zh/pack.zh.md#多个-module-分别选版本合成一个-rpm)。
+目标环境需要 `go-rpm-macros >= 0.3`，仍须人工审查与构建验证。旧 updater 会拒绝
+这种合并 spec，dry run 也不例外。
+
 ### 不写入文件地检查现有 spec 更新
 
 ```bash

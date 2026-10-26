@@ -41,6 +41,17 @@ go-golang-x-net/go-golang-x-net.spec
 go-golang-x-net_<version>.orig.tar.<gz|xz>
 ```
 
+### Combine separately versioned modules
+
+`pack -combine <import-root> -package_name <name> -package_version <version>`
+combines explicit `module@version` inputs into **one library source RPM**, with
+one verified ZIP per module and a `go_submodules` version table. This is opt-in;
+ordinary multiple-argument packing still produces separate packages.
+
+See [combined packing, output and initial limits](docs/en/pack.en.md#combine-independent-module-releases-into-one-rpm).
+Combined specs require `go-rpm-macros >= 0.3` and manual build review. The legacy
+updater refuses them, including in dry-run mode.
+
 ### Check existing spec updates without writing files
 
 ```bash

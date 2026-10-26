@@ -29,6 +29,24 @@ go-golang-x-net/go-golang-x-net.spec
     Number of concurrent checks, default is 3
 ```
 
+## Aggregate Specs Are Unsupported
+
+The legacy updater only updates one `Version` and `Source0`. It must not update
+independent-release aggregate specs. If any spec in the scanned `go-*/*.spec`
+set contains a literal `%global go2spec_combine ...` or
+`%define go2spec_combine ...` definition, the command reports `unsupported` and
+returns nonzero before any network requests or file updates. This also applies
+to `-n` (dry run), and the whole scan is rejected even when ordinary specs are
+present alongside the aggregate spec.
+
+The presence of the definition is checked, not its value: `0`, an empty value,
+or a definition inside a conditional still causes rejection. No RPM macros,
+shell, Lua or conditionals are evaluated. A commented-out example such as
+`# %global go2spec_combine 1` is not a marker. Direct update entry points also
+refuse marked files. Specs without the marker retain the existing behavior.
+Do not remove the marker to bypass this protection; aggregate-aware updating
+is not implemented.
+
 ## Recommended Workflow
 
 Start with dry run mode:

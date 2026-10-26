@@ -31,6 +31,9 @@ type specInfo struct {
 }
 
 func parseSpecFile(path string) (*specInfo, error) {
+	if err := rejectAggregateUpdate(path); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -84,6 +87,11 @@ func normalizeVersion(v string) string {
 }
 
 func checkLatestVersion(ctx context.Context, spec *specInfo) {
+	if err := rejectAggregateUpdate(spec.FilePath); err != nil {
+		spec.Error = err.Error()
+		spec.HasUpdate = false
+		return
+	}
 	if spec.GoImportPath == "" {
 		spec.Error = "no go_import_path"
 		return
@@ -125,6 +133,9 @@ func scanSpecDir(specDir string) ([]*specInfo, error) {
 		}
 		for _, sf := range specFiles {
 			spec, err := parseSpecFile(sf)
+			if errors.Is(err, errAggregateUpdateUnsupported) {
+				return nil, err
+			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to parse %s: %v\n", sf, err)
 				continue

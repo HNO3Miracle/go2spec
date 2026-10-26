@@ -44,6 +44,9 @@ func specVersionForVersion(version string) string {
 }
 
 func verifyDownload(ctx context.Context, spec *specInfo) error {
+	if err := rejectAggregateUpdate(spec.FilePath); err != nil {
+		return err
+	}
 	if spec.GoImportPath == "" {
 		return fmt.Errorf("no go_import_path")
 	}
@@ -255,6 +258,9 @@ func reportDownloadRetry(format string, args ...any) {
 }
 
 func readSpecLines(path string) ([]string, error) {
+	if err := rejectAggregateUpdate(path); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

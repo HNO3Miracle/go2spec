@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -969,7 +970,7 @@ func copyFile(src, dest string) error {
 }
 
 // mainPack is the entry point for the "pack" command.
-func mainPack(args []string, usage func()) {
+func mainPack(args []string, usage func()) int {
 	flagSet := flag.NewFlagSet("pack", flag.ExitOnError)
 	if usage != nil {
 		flagSet.Usage = usage
@@ -1035,12 +1036,58 @@ func mainPack(args []string, usage func()) {
 			"you may set this flag to true and double-check that the resulting\n"+
 			"package name is sane. Contact pkg-go if unsure.")
 
+	var combineRoot, combineName, combineVersion, combineLicense string
+	flagSet.StringVar(&combineRoot, "combine", "", "Combine explicit module@version sources into one library RPM under this import root")
+	flagSet.StringVar(&combineName, "package_name", "", "RPM name for -combine")
+	flagSet.StringVar(&combineVersion, "package_version", "", "Combined RPM Version for -combine, independent of module versions")
+	flagSet.StringVar(&combineLicense, "license", "", "Reviewed SPDX expression for all -combine sources; otherwise require matching versioned license metadata")
+
 	// Actual pack starts here
 
 	// Parse flags
 	err := flagSet.Parse(args)
 	if err != nil {
 		log.Fatalf("parse args: %v", err)
+	}
+
+	visited := make(map[string]bool)
+	flagSet.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	if visited["combine"] {
+		for _, name := range []string{"git_revision", "force_prerelease", "list", "program_package_name", "allow_unknown_hoster"} {
+			if visited[name] {
+				log.Printf("-%s cannot be combined with -combine", name)
+				return 1
+			}
+		}
+		if visited["type"] && pkgTypeString != "library" && pkgTypeString != "lib" && pkgTypeString != "l" && pkgTypeString != "dev" {
+			log.Print("-combine supports only library source RPMs")
+			return 1
+		}
+		req, err := parseAggregateRequest(combineRoot, combineName, combineVersion, combineLicense, flagSet.Args())
+		if err != nil {
+			log.Printf("combine: %v", err)
+			return 1
+		}
+		dir, err := os.Getwd()
+		if err != nil {
+			log.Print(err)
+			return 1
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		output, err := prepareAggregate(ctx, req, dir)
+		if err != nil {
+			log.Printf("combine: %v", err)
+			return 1
+		}
+		log.Printf("Created %s; review the spec, sources and external dependencies before building", output)
+		return 0
+	}
+	for _, name := range []string{"package_name", "package_version", "license"} {
+		if visited[name] {
+			log.Printf("-%s requires -combine", name)
+			return 1
+		}
 	}
 
 	// A package argument or a package-list file is required.
@@ -1084,6 +1131,7 @@ func mainPack(args []string, usage func()) {
 	for _, req := range requests {
 		packPackage(req.gopkg, req.revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
 	}
+	return 0
 }
 
 func collectPackRequests(args []string, listFile, defaultRevision string) ([]packRequest, error) {
