@@ -118,7 +118,7 @@ gofmt
 git diff --check
 ```
 
-该次完整 Go suite 为 94 个顶层测试、396 条 pass 事件，0 fail/skip。测试覆盖请求校验、canonical/major 版本、pseudo-version 转换、Source 身份与 hash、ZIP 越界/特殊条目、license metadata、依赖分类、内部/外部 Module、spec 生成稳定性、输出冲突、失败清理和 updater 拒绝。
+该次完整 Go suite 为 94 个顶层测试、396 条 pass 事件、0 fail/skip。测试覆盖请求校验、canonical/major 版本、pseudo-version 转换、Source 身份与 hash、ZIP 越界/特殊条目、license metadata、依赖分类、内部/外部 Module、spec 生成稳定性、输出冲突、失败清理和 updater 拒绝。
 
 固定公开版本 smoke 已执行：`golang.org/x/sys@v0.29.0` 和 `golang.org/x/term@v0.28.0` 分别生成固定 Proxy Source URL、RemoteAsset hash 和版本映射；正式 CLI 输出目录只包含 spec。该 smoke 是源码准备/spec 生成验证，不是这两个公开 Module 的 native RPM 构建。
 
@@ -184,13 +184,13 @@ go-go2spec-combine-fixture-99.0-1.1.nor.noarch.rpm
 当前代码已在个人 fork 阶段分支并提交 upstream PR：
 
 - 分支：`feature/independent-module-releases-stage`
-- 提交：`7a2a3fc1b524966ee491ed050eaef007baedb47d`
+- 提交：`7f83e41b50beb123c1b27d12c65cfa54a8a4dfce`
 - PR：[openRuyi-Project/go2spec#1](https://github.com/openRuyi-Project/go2spec/pull/1)
 - PR 状态需以 GitHub 当前页面为准；本说明记录的是阶段成果，不表示 PR 已合并。
 
-此次范围是：维护者明确选择多个固定 Module 版本，go2spec 分别准备真实 Source，生成可审查 spec，RPM 构建后得到版本正确的 package Provides。未实现的 provider 查询、自动 Module 选择、完整 MVS/API 兼容性证明和多 Module updater 均已在 CLI/文档中明确限制。
+此次范围是：维护者明确选择多个固定 Module 版本，go2spec 分别准备真实 Source，生成可审查 spec，OBS Source service 在源码准备阶段重新下载固定 Source，RPM 构建阶段离线，并在 native RPM 中得到版本正确的 package Provides。未实现的 provider 查询、自动 Module 选择、完整 MVS/API 兼容性证明和多 Module updater 均已在 CLI/文档中明确限制。
 
-仍需在 review 中重点讨论：spec 的维护性、Source 向目标构建服务的交付方式、正式 `go-rpm-macros >= 0.3` 发布时机，以及公开 Module 示例是否需要进一步做完整 OBS RPM 试点。任何新 package 仍需维护者审查生成 spec、依赖和许可证，不应把自动生成等同于可直接发布。
+仍需在 review 中重点讨论：spec 的维护性、正式 `go-rpm-macros >= 0.3` 发布时机，以及个人 OBS 公开 Module 试点能否满足项目的正式验收要求。任何新 package 仍需维护者审查生成 spec、依赖和许可证，不应把自动生成等同于可直接发布。
 
 ## 6. 方案取舍与可解释性
 
