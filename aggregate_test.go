@@ -393,6 +393,33 @@ func TestAggregateInterruptedStagingRecovery(t *testing.T) {
 	}
 }
 
+func TestAggregateRecoveryRunsBeforeExistingOutputCheck(t *testing.T) {
+	req, _ := aggregateFixture(t)
+	parent := t.TempDir()
+	stale, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireAggregateStagingLock(filepath.Join(stale, aggregateStagingLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseAggregateStagingLock(lock)
+	if err := os.WriteFile(filepath.Join(stale, aggregateIncompleteMarkerName), aggregateStagingMarker(stale), 0600); err != nil {
+		t.Fatal(err)
+	}
+	aggregateWriteFile(t, filepath.Join(parent, req.Name, "keep"), []byte("user data"))
+
+	if _, err := prepareAggregate(context.Background(), req, parent); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("existing output was not preserved: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("staging left after already-published output was detected: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(parent, req.Name, "keep")); err != nil || string(data) != "user data" {
+		t.Fatalf("existing output changed: %q, %v", data, err)
+	}
+}
 func TestAggregatePublishNoReplace(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")

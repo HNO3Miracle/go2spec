@@ -276,12 +276,12 @@ func recoverAggregateStaging(parent, name string) error {
 
 func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) (string, error) {
 	final := filepath.Join(parent, req.Name)
+	if err := recoverAggregateStaging(parent, req.Name); err != nil {
+		return "", err
+	}
 	if _, err := os.Lstat(final); err == nil {
 		return "", fmt.Errorf("output %q already exists; refusing to replace it", final)
 	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	if err := recoverAggregateStaging(parent, req.Name); err != nil {
 		return "", err
 	}
 	work, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
