@@ -29,8 +29,6 @@ import (
 		"examples/helper/helper.go": "package helper\nimport _ \"example.other/helper/runtime\"\n",
 		"examples/demo/demo.go":     "package demo\nimport _ \"example.other/demo/only\"\n",
 		"cmd/tool/main.go":          "package main\nimport _ \"example.other/command/only\"\nfunc main(){}\n",
-		"arch_riscv64.go":           "package a\nimport _ \"example.other/riscv64/only\"\n",
-		"arch_windows.go":           "package a\nimport _ \"example.other/windows/only\"\n",
 	} {
 		aggregateWriteFile(t, filepath.Join(dir, name), []byte(body))
 	}
@@ -44,7 +42,7 @@ import (
 	if err := aggregateDependencies(context.Background(), work, &plan); err != nil {
 		t.Fatal(err)
 	}
-	wantRun := []string{"example.other/helper/runtime", "example.other/riscv64/only", "example.other/runtime/deep/package", "example.test/sdk/a/split/v2/client"}
+	wantRun := []string{"example.other/helper/runtime", "example.other/runtime/deep/package", "example.test/sdk/a/split/v2/client"}
 	wantBuild := append(slices.Clone(wantRun), "example.other/test/deep/package", "example.other/command/only", "example.other/demo/only")
 	slices.Sort(wantBuild)
 	if !reflect.DeepEqual(plan.BuildDeps, wantBuild) || !reflect.DeepEqual(plan.RunDeps, wantRun) {
@@ -95,9 +93,18 @@ func TestAggregateDependencyDiscoveryRejectsIncompleteInput(t *testing.T) {
 	}
 }
 
+func TestAggregateDependenciesRejectArchitectureDifference(t *testing.T) {
+	work := t.TempDir()
+	dir := filepath.Join(work, "source")
+	aggregateWriteFile(t, filepath.Join(dir, "common.go"), []byte("package p\n"))
+	aggregateWriteFile(t, filepath.Join(dir, "riscv.go"), []byte("//go:build riscv64\n\npackage p\nimport _ \"example.other/riscv-only\"\n"))
+	plan := aggregatePlan{Request: aggregateRequest{Root: "example.test/sdk"}, GoVersion: "1.18", Sources: []moduleSource{{Module: module.Version{Path: "example.test/sdk"}, Dir: dir}}}
+	if err := aggregateDependencies(context.Background(), work, &plan); err == nil || !strings.Contains(err.Error(), "architecture") {
+		t.Fatalf("architecture-dependent dependency set was accepted: %v", err)
+	}
+}
 func TestAggregateInstalledToolchainContext(t *testing.T) {
 	work := t.TempDir()
-	t.Setenv("GOEXPERIMENT", "invalid-user-experiment")
 	t.Setenv("GOFLAGS", "-tags=unrelated")
 	t.Setenv("GOARCH", "wasm")
 	t.Setenv("GOOS", "js")

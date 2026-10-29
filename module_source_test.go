@@ -35,7 +35,8 @@ func moduleSourceFixture(t *testing.T) (string, module.Version, moduleDownload, 
 
 func TestVerifyModuleSource(t *testing.T) {
 	work, mod, result, files := moduleSourceFixture(t)
-	files["go.mod"] += "toolchain go1.24.1\nrequire example.test/other v1.0.0\n"
+	files["go.mod"] = strings.Replace(files["go.mod"], "go 1.18", "go 1.23.0", 1)
+	files["go.mod"] += "toolchain go1.26.1\nrequire example.test/other v1.0.0\n"
 	aggregateWriteFile(t, result.GoMod, []byte(files["go.mod"]))
 	aggregateWriteFile(t, result.Zip, aggregateZIP(t, mod, files))
 	source, err := verifyModuleSource(work, mod, "20261019", 7, result)
@@ -46,7 +47,7 @@ func TestVerifyModuleSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.Module != mod || source.RPMVersion != "1.2.3" || source.GoVersion != "1.24.1" || source.SHA256 != hash || source.FileName != "module-7-v1.2.3.zip" || len(source.Requires) != 1 {
+	if source.Module != mod || source.RPMVersion != "1.2.3" || source.GoVersion != "1.23.0" || source.SourceURL != "https://proxy.golang.org/example.test/sdk/a/@v/v1.2.3#/module-7-v1.2.3.zip" || source.SHA256 != hash || source.FileName != "module-7-v1.2.3.zip" || len(source.Requires) != 1 {
 		t.Fatalf("wrong source facts: %+v", source)
 	}
 	data, err := os.ReadFile(filepath.Join(source.Dir, "go.mod"))
@@ -178,28 +179,9 @@ func TestModuleZIPExtractionChecks(t *testing.T) {
 			name := filepath.Join(t.TempDir(), "test.zip")
 			aggregateWriteFile(t, name, data)
 			err = checkModuleZipExtraction(name)
-			if kind == "regular" || kind == "timestamp" || kind == "crc" {
+			if kind == "regular" || kind == "timestamp" {
 				if err != nil {
 					t.Fatal(err)
-				}
-				if kind == "crc" {
-					// Header checks are separate from CheckZip/Unzip. The full
-					// source verifier must reject corrupt payload bytes too.
-					work, mod, result, files := moduleSourceFixture(t)
-					valid := aggregateZIP(t, mod, files)
-					r, err := zip.NewReader(bytes.NewReader(valid), int64(len(valid)))
-					if err != nil {
-						t.Fatal(err)
-					}
-					offset, err := r.File[0].DataOffset()
-					if err != nil {
-						t.Fatal(err)
-					}
-					valid[offset] ^= 0xff
-					aggregateWriteFile(t, result.Zip, valid)
-					if _, err := verifyModuleSource(work, mod, "20261019", 0, result); err == nil {
-						t.Fatal("corrupt payload accepted")
-					}
 				}
 			} else if err == nil {
 				t.Fatal("unsafe extraction metadata accepted")

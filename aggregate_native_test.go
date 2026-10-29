@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,17 +64,33 @@ func TestAggregateNativeFixture(t *testing.T) {
 	}
 	t.Chdir(output)
 	if code := mainPack([]string{
-		"-combine", root, "-package_name", name, "-package_version", "99.0",
+		"-combine", root, "-package_name", name, "-package_version", "99.0", "-url", "https://example.test/go2spec/fixture",
 		"-license", "BSD-3-Clause", mods[1].Path + "@" + mods[1].Version, mods[0].Path + "@" + mods[0].Version,
 	}, nil); code != 0 {
 		t.Fatalf("fixture pack exit=%d", code)
 	}
 	packageDir := filepath.Join(output, name)
+	req, err := parseAggregateRequest(root, name, "99.0", "BSD-3-Clause", []string{mods[1].Path + "@" + mods[1].Version, mods[0].Path + "@" + mods[0].Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.URL = "https://example.test/go2spec/fixture"
+	planWork := t.TempDir()
+	t.Cleanup(func() { _ = removeAggregateWork(planWork) })
+	plan, err := buildAggregatePlan(context.Background(), req, planWork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range plan.Sources {
+		if err := copyFile(source.Zip, filepath.Join(packageDir, source.FileName)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	spec, err := os.ReadFile(filepath.Join(packageDir, name+".spec"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{root + " 1.2.3\n", root + "/sub 0.4.0\n"} {
+	for _, want := range []string{root + " 1.2.3\n", root + "/sub 0.4.0\n", "URL:            https://example.test/go2spec/fixture\n", "Source0:        https://proxy.golang.org/"} {
 		if !strings.Contains(string(spec), want) {
 			t.Fatalf("fixture lost independent version mapping %q", want)
 		}

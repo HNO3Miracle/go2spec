@@ -6,6 +6,7 @@ import (
 	"go/version"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -13,8 +14,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 type aggregateRequest struct {
@@ -22,6 +25,7 @@ type aggregateRequest struct {
 	Name    string
 	Version string
 	License string
+	URL     string
 	Modules []module.Version
 }
 
@@ -41,6 +45,8 @@ var (
 	licenseIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+:-]*$`)
 	goVersionPattern  = regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`)
 )
+
+var pkgsiteModuleTimeout = 30 * time.Second
 
 func parseAggregateRequest(root, name, rpmVersion, license string, args []string) (aggregateRequest, error) {
 	req := aggregateRequest{Root: root, Name: name, Version: rpmVersion, License: license}
@@ -173,7 +179,9 @@ func moduleLicense(ctx context.Context, source *moduleSource, explicit string) (
 	if explicit != "" {
 		return explicit, nil
 	}
-	metadata, err := getPkgsiteModule(ctx, source.Module.Path, source.Module.Version)
+	lookupCtx, cancel := context.WithTimeout(ctx, pkgsiteModuleTimeout)
+	defer cancel()
+	metadata, err := getPkgsiteModule(lookupCtx, source.Module.Path, source.Module.Version)
 	if err != nil {
 		return "", fmt.Errorf("%s: cannot obtain versioned license metadata; supply a reviewed -license expression", source.Module.Path)
 	}
@@ -240,16 +248,6 @@ func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) 
 	if err := os.Mkdir(output, 0755); err != nil {
 		return "", err
 	}
-	for _, source := range plan.Sources {
-		dest := filepath.Join(output, source.FileName)
-		if err := copyFile(source.Zip, dest); err != nil {
-			return "", err
-		}
-		hash, err := fileSHA256(dest)
-		if err != nil || hash != source.SHA256 {
-			return "", fmt.Errorf("%s: copied Source checksum mismatch", source.Module.Path)
-		}
-	}
 	if err := writeAggregateSpec(output, plan); err != nil {
 		return "", err
 	}
@@ -262,11 +260,10 @@ func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) 
 	if err := os.Mkdir(final, 0755); err != nil {
 		return "", err
 	}
-	var names, published []string
-	for _, source := range plan.Sources {
-		names = append(names, source.FileName)
-	}
-	names = append(names, req.Name+".spec")
+	// Publish only the spec. Source archives are fetched by the build service
+	// from the fixed Source URLs in the spec.
+	names := []string{req.Name + ".spec"}
+	var published []string
 	for _, name := range names {
 		dest := filepath.Join(final, name)
 		if err := os.Link(filepath.Join(output, name), dest); err != nil {
@@ -295,20 +292,55 @@ func removeAggregateWork(work string) error {
 	return os.RemoveAll(work)
 }
 
+func effectivePrivatePatterns(ctx context.Context, work string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "go", "env", "GOPRIVATE", "GONOPROXY", "GONOSUMDB")
+	cmd.Dir, cmd.Env = work, combinedGoEnv(work)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine Go private-module configuration")
+	}
+	patterns := strings.Fields(string(out))
+	patterns = append(patterns, os.Getenv("GOPRIVATE"), os.Getenv("GONOPROXY"), os.Getenv("GONOSUMDB"))
+	return patterns, nil
+}
+
+func validateProjectURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(raw, "\r\n\x00") {
+		return fmt.Errorf("-url requires an HTTPS project URL without credentials, query, fragment or control characters")
+	}
+	return nil
+}
+
+func selectedModuleRequirementError(plan aggregatePlan) error {
+	selected := make(map[string]string, len(plan.Sources))
+	for _, source := range plan.Sources {
+		selected[source.Module.Path] = source.Module.Version
+	}
+	for _, source := range plan.Sources {
+		for _, required := range source.Requires {
+			chosen, ok := selected[required.Path]
+			if !ok || semver.Compare(required.Version, chosen) <= 0 {
+				continue
+			}
+			return fmt.Errorf("%s requires %s >= %s, but combine selected %s; choose a compatible module version", source.Module.Path, required.Path, required.Version, chosen)
+		}
+	}
+	return nil
+}
+
 func buildAggregatePlan(ctx context.Context, req aggregateRequest, work string) (aggregatePlan, error) {
 	plan := aggregatePlan{Request: req, GoVersion: "1.16"}
 	if req.License == "" {
-		// Go's persisted configuration can contain GOPRIVATE too. Never send
-		// matching module paths to the public license metadata service.
-		cmd := exec.CommandContext(ctx, "go", "env", "GOPRIVATE")
-		cmd.Dir, cmd.Env = work, combinedGoEnv(work)
-		private, err := cmd.Output()
+		patterns, err := effectivePrivatePatterns(ctx, work)
 		if err != nil {
-			return plan, fmt.Errorf("cannot determine Go private-module configuration")
+			return plan, err
 		}
 		for _, mod := range req.Modules {
-			if module.MatchPrefixPatterns(strings.TrimSpace(string(private)), mod.Path) {
-				return plan, fmt.Errorf("%s: GOPRIVATE module requires a reviewed -license expression; no public metadata lookup performed", mod.Path)
+			for _, pattern := range patterns {
+				if pattern != "" && module.MatchPrefixPatterns(pattern, mod.Path) {
+					return plan, fmt.Errorf("%s: Go private-module configuration (GOPRIVATE/GONOPROXY/GONOSUMDB) requires a reviewed -license expression; no public metadata lookup performed", mod.Path)
+				}
 			}
 		}
 	}
@@ -331,6 +363,9 @@ func buildAggregatePlan(ctx context.Context, req aggregateRequest, work string) 
 		}
 		licenseSet[license] = true
 		plan.Sources = append(plan.Sources, source)
+	}
+	if err := selectedModuleRequirementError(plan); err != nil {
+		return plan, err
 	}
 	licenses := sortedDependencySet(licenseSet)
 	for i, license := range licenses {

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/mod/module"
 )
@@ -90,6 +91,28 @@ func TestAggregateExplicitLicenseStillRequiresSourceMaterial(t *testing.T) {
 	}
 }
 
+func TestAggregateLicenseMetadataTimeout(t *testing.T) {
+	oldTimeout := pkgsiteModuleTimeout
+	t.Cleanup(func() { pkgsiteModuleTimeout = oldTimeout })
+	pkgsiteModuleTimeout = 10 * time.Millisecond
+	oldClient, oldBase := pkgsiteHTTPClient, pkgsiteAPIBase
+	t.Cleanup(func() { pkgsiteHTTPClient, pkgsiteAPIBase = oldClient, oldBase })
+	pkgsiteAPIBase = "https://pkgsite.invalid/v1beta"
+	pkgsiteHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	source := moduleSource{Module: module.Version{Path: "example.test/timeout", Version: "v1.0.0"}, Dir: t.TempDir()}
+	aggregateWriteFile(t, filepath.Join(source.Dir, "LICENSE"), []byte("license\n"))
+	started := time.Now()
+	_, err := moduleLicense(context.Background(), &source, "")
+	if err == nil || !strings.Contains(err.Error(), "cannot obtain versioned license metadata") {
+		t.Fatalf("timeout error = %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("metadata timeout took too long: %s", time.Since(started))
+	}
+}
 func TestModuleOriginOptionalConsistency(t *testing.T) {
 	for _, tc := range []struct {
 		version string

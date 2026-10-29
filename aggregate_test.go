@@ -106,6 +106,25 @@ func aggregateFixture(t *testing.T) (aggregateRequest, string) {
 	return req, proxy
 }
 
+func prepareAggregateTestArtifacts(t *testing.T, req aggregateRequest, parent string) string {
+	t.Helper()
+	output, err := prepareAggregate(context.Background(), req, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	t.Cleanup(func() { _ = removeAggregateWork(work) })
+	plan, err := buildAggregatePlan(context.Background(), req, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range plan.Sources {
+		if err := copyFile(source.Zip, filepath.Join(output, source.FileName)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return output
+}
 func TestAggregatePrivateModulesNoPublicLookup(t *testing.T) {
 	req, _ := aggregateFixture(t)
 	req.License = ""
@@ -124,6 +143,45 @@ func TestAggregatePrivateModulesNoPublicLookup(t *testing.T) {
 	}
 }
 
+func TestAggregateGONOSUMDBModulesNoPublicLookup(t *testing.T) {
+	req, _ := aggregateFixture(t)
+	req.License = ""
+	t.Setenv("GOPRIVATE", "")
+	t.Setenv("GONOPROXY", "")
+	t.Setenv("GONOSUMDB", "example.test/sdk")
+	calls := aggregateUpdateTransport(t, nil)
+	if _, err := prepareAggregate(context.Background(), req, t.TempDir()); err == nil || !strings.Contains(err.Error(), "GONOSUMDB") {
+		t.Fatalf("GONOSUMDB module was not stopped before public metadata lookup: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("GONOSUMDB module path sent to public service: %d", calls.Load())
+	}
+}
+
+func TestAggregateRejectsSelectedModuleBelowRequiredVersion(t *testing.T) {
+	plan := aggregatePlan{Sources: []moduleSource{
+		{Module: module.Version{Path: "example.test/sdk/a", Version: "v1.0.0"}, Requires: []module.Version{{Path: "example.test/sdk/b", Version: "v1.4.0"}}},
+		{Module: module.Version{Path: "example.test/sdk/b", Version: "v1.1.0"}},
+	}}
+	if err := selectedModuleRequirementError(plan); err == nil || !strings.Contains(err.Error(), "v1.4.0") || !strings.Contains(err.Error(), "v1.1.0") {
+		t.Fatalf("selected lower-than-required module was accepted: %v", err)
+	}
+	plan.Sources[1].Module.Version = "v1.4.0"
+	if err := selectedModuleRequirementError(plan); err != nil {
+		t.Fatalf("compatible selected module was rejected: %v", err)
+	}
+}
+
+func TestAggregateProjectURLValidation(t *testing.T) {
+	for _, raw := range []string{"http://example.test/project", "https://user:secret@example.test/project", "https://example.test/project?token=bad", "https://example.test/project#fragment", "https://example.test/project\nSource0:bad"} {
+		if err := validateProjectURL(raw); err == nil {
+			t.Errorf("accepted unsafe project URL %q", raw)
+		}
+	}
+	if err := validateProjectURL("https://example.test/project"); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestAggregateExistingOutputKinds(t *testing.T) {
 	req, _ := aggregateFixture(t)
 	for _, kind := range []string{"empty-directory", "file", "dangling-symlink"} {
@@ -201,11 +259,17 @@ func TestAggregateRequest(t *testing.T) {
 
 func TestAggregatePrepareRealGoFileProxy(t *testing.T) {
 	req, _ := aggregateFixture(t)
-	parent := t.TempDir()
-	output, err := prepareAggregate(context.Background(), req, parent)
+	rawParent := t.TempDir()
+	rawOutput, err := prepareAggregate(context.Background(), req, rawParent)
 	if err != nil {
 		t.Fatal(err)
 	}
+	rawEntries, err := os.ReadDir(rawOutput)
+	if err != nil || len(rawEntries) != 1 || rawEntries[0].Name() != req.Name+".spec" {
+		t.Fatalf("production output contains non-spec artifacts: %v", rawEntries)
+	}
+	parent := t.TempDir()
+	output := prepareAggregateTestArtifacts(t, req, parent)
 	entries, err := os.ReadDir(parent)
 	if err != nil || len(entries) != 1 || entries[0].Name() != req.Name {
 		t.Fatalf("temporary data leaked: %v, %v", entries, err)
@@ -218,7 +282,7 @@ func TestAggregatePrepareRealGoFileProxy(t *testing.T) {
 	for _, want := range []string{
 		"%global go2spec_combine 1",
 		"example.test/sdk/a 1.2.3", "example.test/sdk/b 0.2.0",
-		"Source0:        module-0-v1.2.3.zip", "Source1:        module-1-v0.2.0.zip",
+		"#!RemoteAsset:  sha256:", "Source0:        https://proxy.golang.org/", "Source1:        https://proxy.golang.org/",
 		"go-rpm-macros >= 0.3", "%go_generate_provides", "export GOPROXY=off GOSUMDB=off",
 	} {
 		if !strings.Contains(spec, want) {

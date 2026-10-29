@@ -24,6 +24,7 @@ type moduleSource struct {
 	Module       module.Version
 	RPMVersion   string
 	FileName     string
+	SourceURL    string
 	SHA256       string
 	Zip          string
 	Dir          string
@@ -47,6 +48,18 @@ type moduleDownload struct {
 type moduleOrigin struct {
 	Hash string
 	Ref  string
+}
+
+func moduleProxySourceURL(mod module.Version, fileName string) (string, error) {
+	path, err := module.EscapePath(mod.Path)
+	if err != nil {
+		return "", err
+	}
+	version, err := module.EscapeVersion(mod.Version)
+	if err != nil {
+		return "", err
+	}
+	return "https://proxy.golang.org/" + path + "/@v/" + version + "#/" + fileName, nil
 }
 
 func checkModuleOrigin(version string, origin *moduleOrigin) error {
@@ -187,20 +200,19 @@ func verifyModuleSource(work string, mod module.Version, date string, index int,
 	if parsed.Go != nil {
 		goVersion = parsed.Go.Version
 	}
-	if parsed.Toolchain != nil && parsed.Toolchain.Name != "default" {
-		toolchain := strings.TrimPrefix(parsed.Toolchain.Name, "go")
-		if compareGoVersions(toolchain, goVersion) > 0 {
-			goVersion = toolchain
-		}
-	}
 	var requires []module.Version
 	for _, r := range parsed.Require {
 		requires = append(requires, r.Mod)
 	}
+	fileName := fmt.Sprintf("module-%d-%s.zip", index, mod.Version)
+	sourceURL, err := moduleProxySourceURL(mod, fileName)
+	if err != nil {
+		return fail(fmt.Errorf("construct public Module Proxy Source URL: %w", err))
+	}
 	return moduleSource{
 		Module: mod, RPMVersion: rpmVersion,
-		FileName: fmt.Sprintf("module-%d-%s.zip", index, mod.Version),
-		SHA256:   hash, Zip: result.Zip, Dir: dir, GoVersion: goVersion, Requires: requires,
+		FileName: fileName, SourceURL: sourceURL,
+		SHA256: hash, Zip: result.Zip, Dir: dir, GoVersion: goVersion, Requires: requires,
 	}, nil
 }
 
@@ -255,6 +267,9 @@ func checkModuleZipExtraction(name string) error {
 		if _, err := raw.ReadAt(header, offset-int64(len(header))); err != nil {
 			return fmt.Errorf("ZIP entry %q has unsupported local metadata", file.Name)
 		}
+		localCRC := binary.LittleEndian.Uint32(header[14:])
+		localCompressed := binary.LittleEndian.Uint32(header[18:])
+		localUncompressed := binary.LittleEndian.Uint32(header[22:])
 		if binary.LittleEndian.Uint32(header) != 0x04034b50 ||
 			binary.LittleEndian.Uint16(header[6:]) != file.Flags ||
 			binary.LittleEndian.Uint16(header[8:]) != file.Method ||
@@ -264,6 +279,60 @@ func checkModuleZipExtraction(name string) error {
 			!bytes.Equal(header[30+len(file.Name):], file.Extra) {
 			return fmt.Errorf("ZIP entry %q has inconsistent local metadata", file.Name)
 		}
+		if file.Flags&0x0008 != 0 {
+			if err := validateZIPDataDescriptor(raw, offset+int64(file.CompressedSize64), file); err != nil {
+				return fmt.Errorf("ZIP entry %q has invalid data descriptor: %w", file.Name, err)
+			}
+		} else if localCRC != file.CRC32 || uint64(localCompressed) != file.CompressedSize64 || uint64(localUncompressed) != file.UncompressedSize64 {
+			return fmt.Errorf("ZIP entry %q has inconsistent local CRC or size", file.Name)
+		}
+		content, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("ZIP entry %q cannot be opened: %w", file.Name, err)
+		}
+		_, copyErr := io.Copy(io.Discard, content)
+		closeErr := content.Close()
+		if copyErr != nil {
+			return fmt.Errorf("ZIP entry %q has invalid content or CRC32: %w", file.Name, copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("ZIP entry %q cannot be closed: %w", file.Name, closeErr)
+		}
+	}
+	return nil
+}
+
+func validateZIPDataDescriptor(raw *os.File, offset int64, file *zip.File) error {
+	buf := make([]byte, 24)
+	n, err := raw.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if n < 12 {
+		return fmt.Errorf("truncated data descriptor")
+	}
+	pos := 0
+	if binary.LittleEndian.Uint32(buf) == 0x08074b50 {
+		pos = 4
+	}
+	if file.CompressedSize64 > uint64(^uint32(0)) || file.UncompressedSize64 > uint64(^uint32(0)) {
+		if pos+20 > n {
+			return fmt.Errorf("truncated ZIP64 descriptor")
+		}
+		if binary.LittleEndian.Uint32(buf[pos:]) != file.CRC32 ||
+			binary.LittleEndian.Uint64(buf[pos+4:]) != file.CompressedSize64 ||
+			binary.LittleEndian.Uint64(buf[pos+12:]) != file.UncompressedSize64 {
+			return fmt.Errorf("descriptor CRC or size differs from central directory")
+		}
+		return nil
+	}
+	if pos+12 > n {
+		return fmt.Errorf("truncated data descriptor")
+	}
+	if binary.LittleEndian.Uint32(buf[pos:]) != file.CRC32 ||
+		binary.LittleEndian.Uint32(buf[pos+4:]) != uint32(file.CompressedSize64) ||
+		binary.LittleEndian.Uint32(buf[pos+8:]) != uint32(file.UncompressedSize64) {
+		return fmt.Errorf("descriptor CRC or size differs from central directory")
 	}
 	return nil
 }

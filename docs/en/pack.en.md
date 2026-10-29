@@ -59,15 +59,19 @@ When `-type` is omitted, go2spec uses pkg.go.dev package metadata and local `go 
 
 ## Combine Independent Module Releases into One RPM
 
-`-combine` opts into a separate **library source RPM** mode. Each module keeps
-its explicitly selected release and its own source archive. Without this flag,
-multiple positional arguments still mean separate packages; the existing
-single-module, list and program modes are unchanged.
+`-combine` opts into a separate **library source RPM spec** mode. Each module keeps
+its explicitly selected release and uses a fixed Go Module Proxy Source URL. go2spec
+may download temporary archives locally for validation, but successful output contains
+the spec only; OBS source services download the archives from `SourceN` and verify
+`#!RemoteAsset` during source preparation. Without this flag, multiple positional
+arguments still mean separate packages; the existing single-module, list and program
+modes are unchanged.
 
 ```bash
 # Illustrative module paths; replace them with real modules and versions.
 go2spec pack \
   -combine example.org/sdk \
+  -url https://example.org/sdk \
   -package_name go-example-sdk \
   -package_version 20261019 \
   example.org/sdk/a@v1.2.3 \
@@ -79,6 +83,7 @@ Put flags before positional arguments, as with other Go flag-based commands.
 | Flag | Meaning |
 |---|---|
 | `-combine <import-root>` | Common installation and auto-Provides scan root. This need not itself contain a Go package. |
+| `-url <project-homepage>` | Upstream project homepage written to `URL`; required when a common homepage cannot be determined. |
 | `-package_name <name>` | Explicit RPM name; required with `-combine`. |
 | `-package_version <version>` | Explicit RPM `Version`, without Epoch/Release; independent of module versions. |
 | `-license <expression>` | Optional, manually reviewed license expression covering **all** selected sources. Actual license files are still required. |
@@ -92,23 +97,28 @@ Do not combine this mode with `-git_revision`, `-force_prerelease`, `-list`,
 
 ### Sources, Versions and Output
 
-For the example above, the output is:
+For the example above, the output contains only the spec:
 
 ```text
 go-example-sdk/
   go-example-sdk.spec
-  module-0-v1.2.3.zip
-  module-1-v2.0.0.zip
 ```
 
-Source numbering follows sorted module paths, not argument order. The ZIPs are
-original Go module archives, not repository tarballs sharing one commit. Keep
-them with the spec when preparing build-service sources. No guessed download
-URL, credential-bearing URL, developer-cache path, or extra lock manifest is
-written. The generated `%prep` checks the **raw SHA256 of all ZIPs** before
-extracting any archive; this is not Go's `h1:` module checksum. Review and deliver these fixed files via
-the target build service's source workflow; automatic remote-asset URL/service
-generation is not implemented for this mode.
+A generated Source entry looks like:
+
+```spec
+URL:            https://example.org/sdk
+#!RemoteAsset:  sha256:<module-a-zip-sha256>
+Source0:        https://proxy.golang.org/example.org/sdk/a/@v/v1.2.3.zip#/module-0-v1.2.3.zip
+```
+
+Temporary ZIPs may exist locally while go2spec validates them, but they are not repository inputs.
+
+Source numbering follows sorted module paths, not argument order. Each Source is a fixed Go
+Module Proxy URL immediately preceded by its `#!RemoteAsset: sha256:...` directive. OBS source
+services download and verify these URLs during source preparation; the RPM build remains offline.
+No developer cache path, credential-bearing URL, local ZIP, or extra lock manifest is written, and
+maintainers do not need to add a hand-written `_service`.
 
 Resolution uses `go mod download -json module@version` in a private module/cache,
 with `GOWORK=off` and `GOTOOLCHAIN=local`. User Go network/checksum settings are
@@ -141,15 +151,16 @@ sent to the public metadata service.
 `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` and their dot/hyphen/underscore variants
 are retained under separate per-module license directories.
 
-Dependency discovery combines Linux `amd64` and `riscv64` imports using the local
-Go command's release/tool tags and baseline CPU features. Custom `GOFLAGS` and
-`GOEXPERIMENT` are cleared. Standard packages and actual internal libraries are
-not emitted as external dependencies. External imports retain their **full
-package path** in `go(path)` capabilities; test/command/example-only dependencies
-are build-only unless also needed by a delivered library. A required but unselected
-nested module is external, not silently bundled. This is not MVS, provider lookup,
-or proof that the target repository contains API-compatible dependencies. Review
-the result against the target Go version/build tags and rebuild when they change.
+Dependency discovery separately analyzes Linux `amd64` and `riscv64` imports using the local
+Go command's release/tool tags and baseline CPU features. Custom `GOFLAGS` and `GOEXPERIMENT`
+are cleared. For a noarch combined package, the library-package, BuildRequires and Requires
+sets must agree across both architectures; an architecture-only provider is not emitted as an
+unconditional dependency. Standard packages and actual internal libraries are not emitted as
+external dependencies. External imports retain their **full package path** in `go(path)`
+capabilities; test/command/example-only dependencies are build-only unless also needed by a
+delivered library. A required but unselected nested module is external, not silently bundled.
+This is not MVS, provider lookup, or proof that the target repository contains API-compatible
+dependencies. Review the result against the target Go version/build tags and rebuild when they change.
 
 The spec installs all selected source trees first, then calls
 `%go_generate_provides` once. It does not write ordinary `Provides` by hand or

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -33,17 +34,27 @@ func aggregateDependencies(ctx context.Context, work string, plan *aggregatePlan
 		return fmt.Errorf("selected modules require Go >= %s; automatic toolchain download is disabled", plan.GoVersion)
 	}
 	buildDeps, runDeps := make(map[string]bool), make(map[string]bool)
-	// A noarch source RPM serves both openRuyi Go target architectures.
+	var baselineBuild, baselineRun, baselineLibraries []string
+	baselineSet := false
 	for _, arch := range []string{"amd64", "riscv64"} {
 		bc, std, err := aggregateBuildContext(ctx, work, arch)
 		if err != nil {
 			return err
 		}
+		archBuildDeps, archRunDeps := make(map[string]bool), make(map[string]bool)
 		packages, err := aggregatePackages(*plan, bc)
 		if err != nil {
 			return err
 		}
-		// Libraries can themselves import example/helper packages. Their external
+		// A noarch source RPM serves both openRuyi Go target architectures.
+		// Dependency and library-package sets must therefore agree across them.
+		libraries := make(map[string]bool)
+		for p, pkg := range packages {
+			if pkg.Library {
+				libraries[p] = true
+			}
+		}
+
 		// imports are runtime dependencies too, even without a helper Provides.
 		runtimePackages := make(map[string]bool)
 		var visit func(string)
@@ -87,12 +98,26 @@ func aggregateDependencies(ctx context.Context, work string, plan *aggregatePlan
 					if !safeImportCapability(dep) {
 						return fmt.Errorf("%s: unsupported external import %q", pkg.Path, dep)
 					}
-					buildDeps[dep] = true
+					archBuildDeps[dep] = true
 					if group.runtime {
-						runDeps[dep] = true
+						archRunDeps[dep] = true
 					}
 				}
 			}
+		}
+		archBuild := sortedDependencySet(archBuildDeps)
+		archRun := sortedDependencySet(archRunDeps)
+		archLibraries := make([]string, 0, len(libraries))
+		for p := range libraries {
+			archLibraries = append(archLibraries, p)
+		}
+		slices.Sort(archLibraries)
+		if !baselineSet {
+			baselineSet = true
+			baselineBuild, baselineRun, baselineLibraries = archBuild, archRun, archLibraries
+			buildDeps, runDeps = archBuildDeps, archRunDeps
+		} else if !slices.Equal(baselineBuild, archBuild) || !slices.Equal(baselineRun, archRun) || !slices.Equal(baselineLibraries, archLibraries) {
+			return fmt.Errorf("linux architecture dependency or library package sets differ; a noarch combined RPM cannot represent this safely")
 		}
 	}
 	plan.BuildDeps = sortedDependencySet(buildDeps)

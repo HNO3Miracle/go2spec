@@ -43,9 +43,10 @@ go-golang-x-net_<version>.orig.tar.<gz|xz>
 
 ### 将多个 module 的独立版本合成一个 RPM
 
-使用 `pack -combine <import-root> -package_name <name> -package_version <version>`，
-为每个位置参数显式指定 `module@version`，生成**一个 library 源码 RPM**，内含各自
-校验过的源码 ZIP 和 `go_submodules` 版本表。不加 `-combine` 时，原有多参数分别
+使用 `pack -combine <import-root> -url <project-homepage> -package_name <name> -package_version <version>`，
+为每个位置参数显式指定 `module@version`，生成**一个 library 源码 RPM spec**。spec 中的
+每个 `SourceN` 是固定的 Go Module Proxy URL，并带有 `#!RemoteAsset` 校验值；源码由
+OBS service 在源码准备阶段下载，不需要把 ZIP 提交到仓库。不加 `-combine` 时，原有多参数分别
 打包的语义不变。
 
 具体用法、输出和首版限制见 [pack 文档](docs/zh/pack.zh.md#多个-module-分别选版本合成一个-rpm)。

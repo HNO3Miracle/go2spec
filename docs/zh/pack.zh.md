@@ -59,14 +59,17 @@ go2spec pack golang.org/x/net
 
 ## 多个 module 分别选版本，合成一个 RPM
 
-使用 `-combine` 显式开启新的 **library 源码 RPM** 模式。每个 module 都使用自己
-指定的版本及对应源码，不再共用一个仓库 snapshot。不加这个选项时，多个位置参数
-仍表示分别打包；原有单 module、list、program 模式不变。
+使用 `-combine` 显式开启新的 **library 源码 RPM spec** 模式。每个 module 都使用自己
+指定的版本及对应的 Go Module Proxy Source，不再共用一个仓库 snapshot。go2spec 在本地
+下载源码用于验证，但正式输出只包含 spec；OBS service 根据 Source URL 和
+`#!RemoteAsset` 在源码准备阶段下载 ZIP。不加这个选项时，多个位置参数仍表示分别打包；
+原有单 module、list、program 模式不变。
 
 ```bash
 # 以下是示意路径，使用时替换为真实 module 和版本。
 go2spec pack \
   -combine example.org/sdk \
+  -url https://example.org/sdk \
   -package_name go-example-sdk \
   -package_version 20261019 \
   example.org/sdk/a@v1.2.3 \
@@ -78,6 +81,7 @@ go2spec pack \
 | 选项 | 含义 |
 |---|---|
 | `-combine <import-root>` | 共同的安装路径和 auto-Provides 扫描根；根路径本身可以没有 Go package。 |
+| `-url <project-homepage>` | 上游项目主页，写入 spec 的 `URL`；跨仓库或无法自动判断时必填。 |
 | `-package_name <name>` | 显式 RPM 包名，合并模式必填。 |
 | `-package_version <version>` | 显式 RPM `Version`，不含 Epoch/Release，与各 module 的版本分开。 |
 | `-license <expression>` | 可选：人工审查后填写、覆盖**所有**选定源码的许可证表达式；仍要求有实际许可证文件。 |
@@ -90,21 +94,27 @@ go2spec pack \
 
 ### 源码、版本与输出
 
-上例输出：
+上例输出只有 spec：
 
 ```text
 go-example-sdk/
   go-example-sdk.spec
-  module-0-v1.2.3.zip
-  module-1-v2.0.0.zip
 ```
 
-Source 按 module path 排序编号，不受参数顺序影响。每份 ZIP 都是原始 Go module
-归档，而不是同一 commit 的仓库 tarball。向构建服务准备源码时，应将这些固定文件
-与 spec 一起交付；不生成猜测的下载 URL、带凭据的 URL、开发机 cache 路径或额外
-lock manifest。生成的 `%prep` 先集中验证**全部 ZIP 原始字节的 SHA256**，全部通过后
-才开始解包；这不是 Go 的 `h1:` checksum。本模式暂不自动生成 RemoteAsset URL 或源码服务配置，维护者
-需要按目标构建服务的源码流程审查、交付这些文件。
+spec 中的 Source 例如：
+
+```spec
+URL:            https://example.org/sdk
+#!RemoteAsset:  sha256:<module-a-zip-sha256>
+Source0:        https://proxy.golang.org/example.org/sdk/a/@v/v1.2.3.zip#/module-0-v1.2.3.zip
+```
+
+本地生成阶段可以在临时目录保存 ZIP 用于分析；ZIP 不作为仓库提交物。
+
+Source 按 module path 排序编号，不受参数顺序影响。每份 Source 都是固定版本的 Go Module
+Proxy ZIP URL，并紧邻 `#!RemoteAsset: sha256:...`。OBS service 在源码准备阶段下载并校验
+这些 URL；RPM 构建阶段不联网。生成器不会写入开发机 cache、凭据 URL、local ZIP 或额外
+lock manifest，也不要求维护者手工添加 `_service`。
 
 工具在私有 module/cache 中执行 `go mod download -json module@version`，设置
 `GOWORK=off`、`GOTOOLCHAIN=local`，保留用户的 Go 网络和校验配置。校验返回身份、
@@ -130,13 +140,14 @@ RPM 版本文本。转换不是无损、对所有情况都保序的 Go 版本替
 `LICENCE`、`COPYING`、`NOTICE` 及加点、连字符、下划线的文件名变体；各 module 的
 许可证放进独立子目录，避免多个 `LICENSE` 相互覆盖。
 
-依赖分析合并 Linux `amd64`、`riscv64` 的 imports，使用本地 Go 命令的 release/tool
-build tags 和基线 CPU 特性，清空自定义 `GOFLAGS`、`GOEXPERIMENT`。标准库和实际
-交付的内部 library 不生成外部依赖；外部依赖保留**完整 package import path**，
-形成 `go(path)`。仅测试、命令、example 使用的依赖只进入 BuildRequires；若交付
-的库也需要它，则进入 Requires。被 require、但未选入本 RPM 的 nested module
-仍是外部依赖，不能按同仓库前缀误删。这不是 MVS、provider 查询，也不证明目标仓库
-有 API 兼容的依赖；需要对照目标 Go 版本/build tags 审查，变化后重新验证。
+依赖分析分别扫描 Linux `amd64`、`riscv64` 的 imports，使用本地 Go 命令的 release/tool
+build tags 和基线 CPU 特性，清空自定义 `GOFLAGS`、`GOEXPERIMENT`。生成 noarch 合并包时，
+两架构的 library package、BuildRequires 和 Requires 集合必须一致；架构差异会明确失败，
+不会把 arch-only provider 无条件写成所有架构都需要。标准库和实际交付的内部 library 不生成
+外部依赖；外部依赖保留**完整 package import path**，形成 `go(path)`。仅测试、命令、example
+使用的依赖只进入 BuildRequires；若交付的库也需要它，则进入 Requires。被 require、但未选入
+本 RPM 的 nested module 仍是外部依赖，不能按同仓库前缀误删。这不是 MVS、provider 查询，
+也不证明目标仓库有 API 兼容的依赖；需要对照目标 Go 版本/build tags 审查，变化后重新验证。
 
 spec 先装齐各份源码，再调用一次 `%go_generate_provides`，不手写普通 Provides，
 不因为根路径存在就虚构 root capability。显式 `%install` 替代默认单源码树安装。

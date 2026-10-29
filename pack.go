@@ -1036,11 +1036,12 @@ func mainPack(args []string, usage func()) int {
 			"you may set this flag to true and double-check that the resulting\n"+
 			"package name is sane. Contact pkg-go if unsure.")
 
-	var combineRoot, combineName, combineVersion, combineLicense string
+	var combineRoot, combineName, combineVersion, combineLicense, combineURL string
 	flagSet.StringVar(&combineRoot, "combine", "", "Combine explicit module@version sources into one library RPM under this import root")
 	flagSet.StringVar(&combineName, "package_name", "", "RPM name for -combine")
 	flagSet.StringVar(&combineVersion, "package_version", "", "Combined RPM Version for -combine, independent of module versions")
 	flagSet.StringVar(&combineLicense, "license", "", "Reviewed SPDX expression for all -combine sources; otherwise require matching versioned license metadata")
+	flagSet.StringVar(&combineURL, "url", "", "Upstream project homepage for -combine")
 
 	// Actual pack starts here
 
@@ -1068,6 +1069,11 @@ func mainPack(args []string, usage func()) int {
 			log.Printf("combine: %v", err)
 			return 1
 		}
+		if err := validateProjectURL(combineURL); err != nil {
+			log.Printf("combine: %v", err)
+			return 1
+		}
+		req.URL = combineURL
 		dir, err := os.Getwd()
 		if err != nil {
 			log.Print(err)
@@ -1080,10 +1086,10 @@ func mainPack(args []string, usage func()) int {
 			log.Printf("combine: %v", err)
 			return 1
 		}
-		log.Printf("Created %s; review the spec, sources and external dependencies before building", output)
+		log.Printf("Created %s; review the spec and external dependencies before building", output)
 		return 0
 	}
-	for _, name := range []string{"package_name", "package_version", "license"} {
+	for _, name := range []string{"package_name", "package_version", "license", "url"} {
 		if visited[name] {
 			log.Printf("-%s requires -combine", name)
 			return 1

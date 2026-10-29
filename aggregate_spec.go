@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,14 +47,17 @@ func renderAggregateSpec(plan aggregatePlan) ([]byte, error) {
 	p("Release:        %%autorelease\n")
 	p("Summary:        Go library sources for %s\n", plan.Request.Root)
 	p("License:        %s\n", plan.License)
-	p("URL:            https://pkg.go.dev/%s\n", plan.Request.Root)
+	p("URL:            %s\n", plan.Request.URL)
 	for i, source := range plan.Sources {
+		sourceURL, err := url.Parse(source.SourceURL)
 		if !specSourcePathPattern.MatchString(source.FileName) || filepath.Base(source.FileName) != source.FileName ||
-			!isValidSHA256(source.SHA256) {
-			return nil, fmt.Errorf("%s: invalid Source filename or SHA256", source.Module.Path)
+			!isValidSHA256(source.SHA256) || err != nil || sourceURL.Scheme != "https" || sourceURL.Host == "" || sourceURL.User != nil ||
+			sourceURL.Fragment != "/"+source.FileName {
+			return nil, fmt.Errorf("%s: invalid Source URL, filename or SHA256", source.Module.Path)
 		}
-		p("# Source%d: %s@%s; original Go module ZIP, shipped with this spec.\n", i, source.Module.Path, source.Module.Version)
-		p("Source%d:        %s\n", i, source.FileName)
+		p("# Module: %s@%s\n", source.Module.Path, source.Module.Version)
+		p("#!RemoteAsset:  sha256:%s\n", source.SHA256)
+		p("Source%d:        %s\n", i, source.SourceURL)
 	}
 	p("\nBuildArch:      noarch\nBuildSystem:    golangmodules\n\n")
 	p("BuildRequires:  go >= %s\n", plan.GoVersion)
@@ -70,12 +74,6 @@ func renderAggregateSpec(plan aggregatePlan) ([]byte, error) {
 		p("- %s %s\n", source.Module.Path, source.Module.Version)
 	}
 	p("\n%%prep\n%%setup -q -c -T\n")
-	// A bad later Source must fail before any archive is extracted.
-	p("sha256sum -c <<'EOF'\n")
-	for i, source := range plan.Sources {
-		p("%s  %%{SOURCE%d}\n", source.SHA256, i)
-	}
-	p("EOF\n")
 	for i, source := range plan.Sources {
 		root := fmt.Sprintf("module-%d/%s@%s", i, source.Module.Path, source.Module.Version)
 		if !specSourcePathPattern.MatchString(root) {

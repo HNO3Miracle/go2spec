@@ -68,10 +68,7 @@ func testAggregateSpecOfflineSourceLayout(t *testing.T, count int) {
 			wantLicenses[fmt.Sprintf("module-%d/%s", i, name)] = files[name]
 		}
 	}
-	output, err := prepareAggregate(context.Background(), req, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	output := prepareAggregateTestArtifacts(t, req, t.TempDir())
 	data, err := os.ReadFile(filepath.Join(output, req.Name+".spec"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +77,8 @@ func testAggregateSpecOfflineSourceLayout(t *testing.T, count int) {
 	if strings.Count(spec, "%go_generate_provides ") != 1 || strings.Contains(spec, "Provides:") || strings.Contains(spec, "go_submodules_file") {
 		t.Fatal("wrong auto-Provides interface")
 	}
-	if strings.Contains(spec, "ver_module") || strings.Count(spec, "sha256sum -c") != 1 {
-		t.Fatal("redundant version macros or per-Source checksum commands")
+	if strings.Contains(spec, "ver_module") || strings.Contains(spec, "sha256sum -c") {
+		t.Fatal("redundant version macros or build-time checksum commands")
 	}
 	for _, mod := range req.Modules {
 		if !strings.Contains(spec, mod.Path+" "+strings.TrimPrefix(mod.Version, "v")+"\n") {
@@ -154,31 +151,6 @@ func testAggregateSpecOfflineSourceLayout(t *testing.T, count int) {
 	} else if strings.Count(string(out), "--- PASS: TestValue") != count {
 		t.Fatalf("not all modules' tests ran:\n%s", out)
 	}
-	for i, mod := range req.Modules {
-		t.Run("tampered-Source"+strconv.Itoa(i), func(t *testing.T) {
-			zipName := filepath.Join(sources, fmt.Sprintf("module-%d-%s.zip", i, mod.Version))
-			original, err := os.ReadFile(zipName)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := os.WriteFile(zipName, original, 0644); err != nil {
-					t.Error(err)
-				}
-			})
-			if err := os.WriteFile(zipName, append(original, []byte("changed")...), 0644); err != nil {
-				t.Fatal(err)
-			}
-			badLayout := t.TempDir()
-			if out, err := run(badLayout, prep); err == nil || !strings.Contains(string(out), "FAILED") {
-				t.Fatalf("tampered Source not rejected by generated prep: %v\n%s", err, out)
-			}
-			entries, err := os.ReadDir(badLayout)
-			if err != nil || len(entries) != 0 {
-				t.Fatalf("unpacked Source before all checksums passed: %v, %v", entries, err)
-			}
-		})
-	}
 }
 
 func aggregateAssertTree(t *testing.T, root string, files map[string]string) {
@@ -227,7 +199,7 @@ func TestAggregateSpecRejectsUnsafeSourceFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"filename", "hash", "license"} {
+	for _, field := range []string{"filename", "hash", "license", "source-url"} {
 		t.Run(field, func(t *testing.T) {
 			bad := plan
 			bad.Sources = append([]moduleSource(nil), plan.Sources...)
@@ -238,6 +210,8 @@ func TestAggregateSpecRejectsUnsafeSourceFields(t *testing.T) {
 				bad.Sources[0].SHA256 = "not-a-file-checksum"
 			case "license":
 				bad.Sources[0].LicenseFiles = []string{"../../outside"}
+			case "source-url":
+				bad.Sources[0].SourceURL = "https://user:secret@example.test/source.zip#/module.zip"
 			}
 			if _, err := renderAggregateSpec(bad); err == nil {
 				t.Fatal("unsafe source field accepted")
