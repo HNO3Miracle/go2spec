@@ -336,6 +336,90 @@ func TestAggregateExistingOutputPreserved(t *testing.T) {
 		t.Fatalf("existing data changed: %q, %v", data, err)
 	}
 }
+func TestAggregateInterruptedStagingRecovery(t *testing.T) {
+	req, _ := aggregateFixture(t)
+	parent := t.TempDir()
+	stale, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleLock, err := acquireAggregateStagingLock(filepath.Join(stale, aggregateStagingLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseAggregateStagingLock(staleLock)
+	if err := os.WriteFile(filepath.Join(stale, aggregateIncompleteMarkerName), aggregateStagingMarker(stale), 0600); err != nil {
+		t.Fatal(err)
+	}
+	aggregateWriteFile(t, filepath.Join(stale, "partial-output"), []byte("incomplete"))
+
+	unowned, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregateWriteFile(t, filepath.Join(unowned, "keep"), []byte("user data"))
+
+	active, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeLock, err := acquireAggregateStagingLock(filepath.Join(active, aggregateStagingLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		releaseAggregateStagingLock(activeLock)
+		_ = removeAggregateWork(active)
+	})
+	if err := os.WriteFile(filepath.Join(active, aggregateIncompleteMarkerName), aggregateStagingMarker(active), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := prepareAggregate(context.Background(), req, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale owned staging tree was not recovered: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(unowned, "keep")); err != nil || string(data) != "user data" {
+		t.Fatalf("recovery touched unowned staging data: %q, %v", data, err)
+	}
+	if _, err := os.Stat(active); err != nil {
+		t.Fatalf("recovery removed active staging tree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(output, req.Name+".spec")); err != nil {
+		t.Fatalf("recovered invocation did not publish the spec: %v", err)
+	}
+}
+
+func TestAggregatePublishNoReplace(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	final := filepath.Join(root, "final")
+	if err := os.Mkdir(staging, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "spec"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(final, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(final, "keep"), []byte("user data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishAggregateDirectory(staging, final); err == nil {
+		t.Fatal("publication replaced an existing directory")
+	}
+	data, err := os.ReadFile(filepath.Join(final, "keep"))
+	if err != nil || string(data) != "user data" {
+		t.Fatalf("existing destination changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(staging, "spec")); err != nil || string(data) != "new" {
+		t.Fatalf("failed publication changed staging data: %q, %v", data, err)
+	}
+}
 
 func TestAggregateCLIRejectsConflictingFlags(t *testing.T) {
 	for _, args := range [][]string{

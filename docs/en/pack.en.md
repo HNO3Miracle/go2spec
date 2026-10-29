@@ -138,7 +138,15 @@ revision formats currently fail instead of being silently rewritten.
 All selected sources must pass validation before publishing output. Existing
 output paths, including empty directories, are refused. On ordinary errors,
 private temporary sources are cleaned and no successful spec is published.
-Never treat an interrupted output directory without its final spec as complete.
+On Linux with kernel/filesystem support for `RENAME_NOREPLACE`, the complete
+spec directory is published in one atomic rename; otherwise publication fails
+without replacing an existing path. If the process stops before publication,
+the next invocation removes only inactive matching staging trees carrying
+go2spec's ownership marker and retries. Active staging trees, unmarked paths,
+and unrelated user paths are left untouched. This guarantees namespace
+publication, not filesystem crash durability without an explicit sync. Combined
+publication is rejected on non-Linux systems. Never treat an interrupted output
+directory without its final spec as complete.
 
 ### Licenses, Dependencies and Build Review
 

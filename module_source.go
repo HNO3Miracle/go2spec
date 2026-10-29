@@ -59,7 +59,7 @@ func moduleProxySourceURL(mod module.Version, fileName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "https://proxy.golang.org/" + path + "/@v/" + version + "#/" + fileName, nil
+	return "https://proxy.golang.org/" + path + "/@v/" + version + ".zip#/" + fileName, nil
 }
 
 func checkModuleOrigin(version string, origin *moduleOrigin) error {

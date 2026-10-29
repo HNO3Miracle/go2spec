@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"go/version"
 	"io/fs"
@@ -219,6 +221,59 @@ func moduleLicense(ctx context.Context, source *moduleSource, explicit string) (
 	return result, nil
 }
 
+func aggregateStagingPrefix(name string) string {
+	return ".go2spec-combine-" + name + "-"
+}
+
+const (
+	aggregateIncompleteMarkerName = ".go2spec-incomplete"
+	aggregateStagingLockName      = ".go2spec-lock"
+)
+
+func aggregateStagingMarker(staging string) []byte {
+	return []byte("go2spec aggregate staging v1\n" + filepath.Base(staging) + "\n")
+}
+
+func recoverAggregateStagingTree(staging string) error {
+	lock, locked, err := tryLockAggregateStaging(filepath.Join(staging, aggregateStagingLockName))
+	if err != nil || !locked {
+		return err
+	}
+	defer releaseAggregateStagingLock(lock)
+	marker := filepath.Join(staging, aggregateIncompleteMarkerName)
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !bytes.Equal(data, aggregateStagingMarker(staging)) {
+		return fmt.Errorf("refusing to remove unrecognized staging directory %q", staging)
+	}
+	if err := removeAggregateWork(staging); err != nil {
+		return fmt.Errorf("recover incomplete output %q: %w", staging, err)
+	}
+	return nil
+}
+
+func recoverAggregateStaging(parent, name string) error {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return err
+	}
+	prefix := aggregateStagingPrefix(name)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) || !entry.IsDir() {
+			continue
+		}
+		if err := recoverAggregateStagingTree(filepath.Join(parent, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) (string, error) {
 	final := filepath.Join(parent, req.Name)
 	if _, err := os.Lstat(final); err == nil {
@@ -226,8 +281,27 @@ func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) 
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
-	work, err := os.MkdirTemp(parent, ".go2spec-combine-")
+	if err := recoverAggregateStaging(parent, req.Name); err != nil {
+		return "", err
+	}
+	work, err := os.MkdirTemp(parent, aggregateStagingPrefix(req.Name))
 	if err != nil {
+		return "", err
+	}
+	lock, err := acquireAggregateStagingLock(filepath.Join(work, aggregateStagingLockName))
+	if err != nil {
+		_ = removeAggregateWork(work)
+		return "", err
+	}
+	defer releaseAggregateStagingLock(lock)
+	marker := filepath.Join(work, aggregateIncompleteMarkerName)
+	markerTemp := marker + ".tmp"
+	if err := os.WriteFile(markerTemp, aggregateStagingMarker(work), 0600); err != nil {
+		_ = removeAggregateWork(work)
+		return "", err
+	}
+	if err := os.Rename(markerTemp, marker); err != nil {
+		_ = removeAggregateWork(work)
 		return "", err
 	}
 	defer func() {
@@ -254,26 +328,13 @@ func prepareAggregate(ctx context.Context, req aggregateRequest, parent string) 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	// Reserve the name only after validation. Link the already verified files
-	// without replacing anything, and publish the spec last. The staging tree
-	// is on the same filesystem; its links are removed by the deferred cleanup.
-	if err := os.Mkdir(final, 0755); err != nil {
-		return "", err
-	}
-	// Publish only the spec. Source archives are fetched by the build service
-	// from the fixed Source URLs in the spec.
-	names := []string{req.Name + ".spec"}
-	var published []string
-	for _, name := range names {
-		dest := filepath.Join(final, name)
-		if err := os.Link(filepath.Join(output, name), dest); err != nil {
-			for _, file := range published {
-				_ = os.Remove(file)
-			}
-			_ = os.Remove(final) // Refuses to remove a nonempty directory.
-			return "", err
+	// Publish the complete output directory atomically. A marked staging tree
+	// left by interruption can be recovered by the next invocation.
+	if err := publishAggregateDirectory(output, final); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("output %q already exists; refusing to replace it", final)
 		}
-		published = append(published, dest)
+		return "", fmt.Errorf("cannot publish output %q: %w", final, err)
 	}
 	return final, nil
 }

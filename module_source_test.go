@@ -47,7 +47,7 @@ func TestVerifyModuleSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.Module != mod || source.RPMVersion != "1.2.3" || source.GoVersion != "1.23.0" || source.SourceURL != "https://proxy.golang.org/example.test/sdk/a/@v/v1.2.3#/module-7-v1.2.3.zip" || source.SHA256 != hash || source.FileName != "module-7-v1.2.3.zip" || len(source.Requires) != 1 {
+	if source.Module != mod || source.RPMVersion != "1.2.3" || source.GoVersion != "1.23.0" || source.SourceURL != "https://proxy.golang.org/example.test/sdk/a/@v/v1.2.3.zip#/module-7-v1.2.3.zip" || source.SHA256 != hash || source.FileName != "module-7-v1.2.3.zip" || len(source.Requires) != 1 {
 		t.Fatalf("wrong source facts: %+v", source)
 	}
 	data, err := os.ReadFile(filepath.Join(source.Dir, "go.mod"))

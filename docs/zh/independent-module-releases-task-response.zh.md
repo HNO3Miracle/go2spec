@@ -122,7 +122,29 @@ git diff --check
 
 固定公开版本 smoke 已执行：`golang.org/x/sys@v0.29.0` 和 `golang.org/x/term@v0.28.0` 分别生成固定 Proxy Source URL、RemoteAsset hash 和版本映射；正式 CLI 输出目录只包含 spec。该 smoke 是源码准备/spec 生成验证，不是这两个公开 Module 的 native RPM 构建。
 
-### 4.2 真实 OBS native fixture
+### 4.2 spec-only OBS Source service smoke
+
+公开 Module 的 spec-only 验收已在个人 OBS 测试项目完成：
+
+```text
+项目：home:HNO3Miracle:go-auto-provides
+包：go-golang-x-sys-term
+revision：5
+页面：[个人 OBS 包页面](https://build.openruyi.cn/package/show/home:HNO3Miracle:go-auto-provides/go-golang-x-sys-term)
+```
+
+该 revision 的 OBS source service 状态为 `succeeded`；包的输入只有 `_service` 和生成的
+spec，没有提交 Module ZIP。`download_assets` 从两个固定 Go Proxy URL 下载并校验 Source，随后
+`amd64/x86_64` 和 `riscv64/riscv64` 均正常执行 `rpmbuild -ba` 和 `%check`，结果为
+`succeeded`。两份构建日志都显示 `go-rpm-macros-0.3-8.1.nor`、两个 `unzip` Source、正常
+Go 测试和 noarch RPM 产物。产物中的 `go(...)` capability 使用 `x/sys` 的 `0.29.0` 与
+`x/term` 的 `0.28.0`，没有使用聚合 RPM 的 `20261029` 作为 Module capability 版本。
+
+这是公开 Source service 和 spec-only 交付链路的阶段性证据。`0.3-8.1` 来自个人 OBS 测试
+项目，不等于官方发行仓库的宏发布；官方宏包来源/发布仍需由社区维护者确认。合成 fixture
+的旧手工 ZIP 验收仍只作为独立的安装/Provides 回归证据。
+
+### 4.3 真实 OBS native fixture
 
 受控 fixture 已提交到个人 OBS 测试项目：
 
