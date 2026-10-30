@@ -49,6 +49,19 @@ func TestAggregateNativeFixture(t *testing.T) {
 		aggregateProxyModule(t, proxy, mod, files[i])
 	}
 	aggregateProxyEnv(t, proxy)
+	restoreFetcher := fetchPublicModuleZip
+	fetchPublicModuleZip = func(_ context.Context, _ string, mod module.Version, _ string, _ int) (string, error) {
+		path, err := module.EscapePath(mod.Path)
+		if err != nil {
+			return "", err
+		}
+		version, err := module.EscapeVersion(mod.Version)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(proxy, filepath.FromSlash(path), "@v", version+".zip"), nil
+	}
+	t.Cleanup(func() { fetchPublicModuleZip = restoreFetcher })
 
 	output := os.Getenv("GO2SPEC_NATIVE_FIXTURE_DIR")
 	if output == "" {

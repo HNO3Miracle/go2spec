@@ -99,6 +99,19 @@ func aggregateFixture(t *testing.T) (aggregateRequest, string) {
 		aggregateProxyModule(t, proxy, mod, files)
 	}
 	aggregateProxyEnv(t, proxy)
+	restoreFetcher := fetchPublicModuleZip
+	fetchPublicModuleZip = func(_ context.Context, _ string, mod module.Version, _ string, _ int) (string, error) {
+		path, err := module.EscapePath(mod.Path)
+		if err != nil {
+			return "", err
+		}
+		version, err := module.EscapeVersion(mod.Version)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(proxy, filepath.FromSlash(path), "@v", version+".zip"), nil
+	}
+	t.Cleanup(func() { fetchPublicModuleZip = restoreFetcher })
 	req, err := parseAggregateRequest("example.test/sdk", "go-example-sdk", "20261019", "MIT", []string{mods[1].Path + "@" + mods[1].Version, mods[0].Path + "@" + mods[0].Version})
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +168,17 @@ func TestAggregateGONOSUMDBModulesNoPublicLookup(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("GONOSUMDB module path sent to public service: %d", calls.Load())
+	}
+}
+
+func TestAggregatePrivateModulesWithExplicitLicenseRejectPublicSource(t *testing.T) {
+	req, _ := aggregateFixture(t)
+	req.License = "MIT"
+	t.Setenv("GOPRIVATE", "")
+	t.Setenv("GONOPROXY", "")
+	t.Setenv("GONOSUMDB", "example.test/sdk")
+	if _, err := prepareAggregate(context.Background(), req, t.TempDir()); err == nil || !strings.Contains(err.Error(), "public Module Proxy Source URL") {
+		t.Fatalf("private module with explicit license was not rejected: %v", err)
 	}
 }
 

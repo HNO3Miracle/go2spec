@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -49,6 +51,10 @@ type moduleOrigin struct {
 	Hash string
 	Ref  string
 }
+
+type publicModuleZipFetcher func(context.Context, string, module.Version, string, int) (string, error)
+
+var fetchPublicModuleZip publicModuleZipFetcher = downloadPublicModuleZip
 
 func moduleProxySourceURL(mod module.Version, fileName string) (string, error) {
 	path, err := module.EscapePath(mod.Path)
@@ -125,10 +131,10 @@ func downloadModuleSource(ctx context.Context, work string, mod module.Version, 
 	if result.Error != "" || result.Path != mod.Path || result.Version != mod.Version {
 		return moduleSource{}, fmt.Errorf("%s@%s: download identity/version mismatch or module error", mod.Path, mod.Version)
 	}
-	return verifyModuleSource(work, mod, date, index, result)
+	return verifyModuleSource(ctx, work, mod, date, index, result)
 }
 
-func verifyModuleSource(work string, mod module.Version, date string, index int, result moduleDownload) (moduleSource, error) {
+func verifyModuleSource(ctx context.Context, work string, mod module.Version, date string, index int, result moduleDownload) (moduleSource, error) {
 	fail := func(err error) (moduleSource, error) {
 		return moduleSource{}, fmt.Errorf("%s@%s: source verification: %w", mod.Path, mod.Version, err)
 	}
@@ -209,11 +215,66 @@ func verifyModuleSource(work string, mod module.Version, date string, index int,
 	if err != nil {
 		return fail(fmt.Errorf("construct public Module Proxy Source URL: %w", err))
 	}
+	publicZip, err := fetchPublicModuleZip(ctx, work, mod, sourceURL, index)
+	if err != nil {
+		return fail(fmt.Errorf("validate emitted public Source URL: %w", err))
+	}
+	publicHash, err := fileSHA256(publicZip)
+	if err != nil {
+		return fail(fmt.Errorf("hash emitted public Source: %w", err))
+	}
+	if publicHash != hash {
+		return fail(fmt.Errorf("emitted public Source bytes differ from the configured Go proxy ZIP; refusing a non-reproducible Source"))
+	}
+	if _, err := modzip.CheckZip(mod, publicZip); err != nil {
+		return fail(fmt.Errorf("emitted public Source identity check: %w", err))
+	}
 	return moduleSource{
 		Module: mod, RPMVersion: rpmVersion,
 		FileName: fileName, SourceURL: sourceURL,
 		SHA256: hash, Zip: result.Zip, Dir: dir, GoVersion: goVersion, Requires: requires,
 	}, nil
+}
+
+func downloadPublicModuleZip(ctx context.Context, work string, mod module.Version, sourceURL string, index int) (string, error) {
+	u, err := url.Parse(sourceURL)
+	if err != nil || u.Scheme != "https" || u.Host != "proxy.golang.org" || u.User != nil || u.RawQuery != "" {
+		return "", fmt.Errorf("emitted Source URL is not a public Go Module Proxy URL")
+	}
+	u.Fragment = ""
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 5 * time.Minute}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s returned %s", u.String(), response.Status)
+	}
+	if response.ContentLength > modzip.MaxZipFile {
+		return "", fmt.Errorf("public Module Proxy ZIP exceeds the Go ZIP limit")
+	}
+	name := filepath.Join(work, fmt.Sprintf("public-module-%d.zip", index))
+	file, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", err
+	}
+	written, copyErr := io.Copy(file, io.LimitReader(response.Body, modzip.MaxZipFile+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if written > modzip.MaxZipFile || (response.ContentLength >= 0 && written != response.ContentLength) {
+		return "", fmt.Errorf("public Module Proxy ZIP size is invalid")
+	}
+	return name, nil
 }
 
 func checkModuleZipExtraction(name string) error {

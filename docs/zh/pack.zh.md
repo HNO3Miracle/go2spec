@@ -120,7 +120,9 @@ lock manifest，也不要求维护者手工添加 `_service`。
 `GOWORK=off`、`GOTOOLCHAIN=local`，保留用户的 Go 网络和校验配置。校验返回身份、
 `.info`、module 声明、ZIP 中实际 `go.mod`，并拒绝可选 Origin 中冲突的 tag 或
 pseudo-version hash。SHA256 只固定字节，并非独立的 release 身份认证；下载的
-信任仍取决于 Go proxy/checksum 配置。
+信任仍取决于 Go proxy/checksum 配置。生成的公共 Source URL 会在发布前重新下载，并与本地
+验证下载的 ZIP 原始字节逐一比较。若代理返回不同 ZIP，或 direct-only module 无法从
+`proxy.golang.org` 获取，工具会失败，而不是生成 OBS 后续会拒绝的 hash。
 
 spec 分开保存 canonical Go version 与 RPM 兼容版本，并生成完整的两列
 `go_submodules` 表。正式版本去掉 `v`；预发布用 `~`；pseudo-version 使用**本次
@@ -140,10 +142,13 @@ RPM 版本文本。转换不是无损、对所有情况都保序的 Go 版本替
 
 不传 `-license` 时，按每个**固定 module 版本**获取元数据，并逐一核对识别到的
 许可证文件内容（仅规范 CRLF）。缺失或不一致直接报错，不写 `TODO`。只有人工审查
-全部源码的许可后才能使用 `-license`，语法校验不等于法律审查。匹配 Go `GOPRIVATE`
-配置的 module 必须传 `-license`，不会将其路径发送给公共元数据服务。识别 `LICENSE`、
-`LICENCE`、`COPYING`、`NOTICE` 及加点、连字符、下划线的文件名变体；各 module 的
-许可证放进独立子目录，避免多个 `LICENSE` 相互覆盖。
+全部源码的许可后才能使用 `-license`，语法校验不等于法律审查。
+匹配 Go 任一私有 module 保护设置——`GOPRIVATE`、`GONOPROXY` 或 `GONOSUMDB`——的
+module 不能使用本模式的公共 Go Module Proxy `SourceN` URL。工具会要求未来的私有
+Source 工作流，也不会将这些路径发送给公共许可证元数据服务。即使提供了
+`-license`，也不能绕过这一 Source 安全限制。识别 `LICENSE`、`LICENCE`、`COPYING`、
+`NOTICE` 及加点、连字符、下划线的文件名变体；各 module 的许可证放进独立子目录，
+避免多个 `LICENSE` 相互覆盖。
 
 依赖分析分别扫描 Linux `amd64`、`riscv64` 的 imports，使用本地 Go 命令的 release/tool
 build tags 和基线 CPU 特性，清空自定义 `GOFLAGS`、`GOEXPERIMENT`。生成 noarch 合并包时，

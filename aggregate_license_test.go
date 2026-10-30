@@ -132,7 +132,7 @@ func TestModuleOriginOptionalConsistency(t *testing.T) {
 	}
 	work, mod, result, _ := moduleSourceFixture(t)
 	aggregateWriteFile(t, result.Info, []byte(`{"Version":"v1.2.3","Origin":{"Ref":"refs/tags/v1.2.4"}}`))
-	if _, err := verifyModuleSource(work, mod, "20261019", 0, result); err == nil {
+	if _, err := verifyModuleSource(context.Background(), work, mod, "20261019", 0, result); err == nil {
 		t.Fatal("source verifier ignored contradictory Origin in .info")
 	}
 }

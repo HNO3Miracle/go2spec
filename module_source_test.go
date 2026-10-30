@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,63 @@ import (
 
 	"golang.org/x/mod/module"
 )
+
+func rawStoredZIP(name string, payload []byte, descriptor, descriptorSignature bool) []byte {
+	crc := crc32.ChecksumIEEE(payload)
+	flags := uint16(0)
+	if descriptor {
+		flags = 0x0008
+	}
+	local := make([]byte, 30+len(name))
+	binary.LittleEndian.PutUint32(local, 0x04034b50)
+	binary.LittleEndian.PutUint16(local[4:], 20)
+	binary.LittleEndian.PutUint16(local[6:], flags)
+	binary.LittleEndian.PutUint16(local[8:], zip.Store)
+	if !descriptor {
+		binary.LittleEndian.PutUint32(local[14:], crc)
+		binary.LittleEndian.PutUint32(local[18:], uint32(len(payload)))
+		binary.LittleEndian.PutUint32(local[22:], uint32(len(payload)))
+	}
+	binary.LittleEndian.PutUint16(local[26:], uint16(len(name)))
+	copy(local[30:], name)
+	data := append(local, payload...)
+	if descriptor {
+		desc := make([]byte, 12)
+		if descriptorSignature {
+			desc = make([]byte, 16)
+			binary.LittleEndian.PutUint32(desc, 0x08074b50)
+		}
+		pos := 0
+		if descriptorSignature {
+			pos = 4
+		}
+		binary.LittleEndian.PutUint32(desc[pos:], crc)
+		binary.LittleEndian.PutUint32(desc[pos+4:], uint32(len(payload)))
+		binary.LittleEndian.PutUint32(desc[pos+8:], uint32(len(payload)))
+		data = append(data, desc...)
+	}
+	central := make([]byte, 46+len(name))
+	binary.LittleEndian.PutUint32(central, 0x02014b50)
+	binary.LittleEndian.PutUint16(central[4:], 0x0314)
+	binary.LittleEndian.PutUint16(central[6:], 20)
+	binary.LittleEndian.PutUint16(central[8:], flags)
+	binary.LittleEndian.PutUint16(central[10:], zip.Store)
+	binary.LittleEndian.PutUint32(central[16:], crc)
+	binary.LittleEndian.PutUint32(central[20:], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(central[24:], uint32(len(payload)))
+	binary.LittleEndian.PutUint16(central[28:], uint16(len(name)))
+	binary.LittleEndian.PutUint32(central[38:], uint32(0100644)<<16)
+	copy(central[46:], name)
+	centralOffset := uint32(len(data))
+	data = append(data, central...)
+	eocd := make([]byte, 22)
+	binary.LittleEndian.PutUint32(eocd, 0x06054b50)
+	binary.LittleEndian.PutUint16(eocd[8:], 1)
+	binary.LittleEndian.PutUint16(eocd[10:], 1)
+	binary.LittleEndian.PutUint32(eocd[12:], uint32(len(central)))
+	binary.LittleEndian.PutUint32(eocd[16:], centralOffset)
+	return append(data, eocd...)
+}
 
 func moduleSourceFixture(t *testing.T) (string, module.Version, moduleDownload, map[string]string) {
 	t.Helper()
@@ -30,6 +88,11 @@ func moduleSourceFixture(t *testing.T) (string, module.Version, moduleDownload, 
 	aggregateWriteFile(t, result.Info, []byte(`{"Version":"v1.2.3"}`))
 	aggregateWriteFile(t, result.GoMod, []byte(files["go.mod"]))
 	aggregateWriteFile(t, result.Zip, aggregateZIP(t, mod, files))
+	oldFetcher := fetchPublicModuleZip
+	fetchPublicModuleZip = func(_ context.Context, _ string, _ module.Version, _ string, _ int) (string, error) {
+		return result.Zip, nil
+	}
+	t.Cleanup(func() { fetchPublicModuleZip = oldFetcher })
 	return work, mod, result, files
 }
 
@@ -39,7 +102,7 @@ func TestVerifyModuleSource(t *testing.T) {
 	files["go.mod"] += "toolchain go1.26.1\nrequire example.test/other v1.0.0\n"
 	aggregateWriteFile(t, result.GoMod, []byte(files["go.mod"]))
 	aggregateWriteFile(t, result.Zip, aggregateZIP(t, mod, files))
-	source, err := verifyModuleSource(work, mod, "20261019", 7, result)
+	source, err := verifyModuleSource(context.Background(), work, mod, "20261019", 7, result)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +116,23 @@ func TestVerifyModuleSource(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(source.Dir, "go.mod"))
 	if err != nil || string(data) != files["go.mod"] {
 		t.Fatalf("wrong extracted go.mod: %q, %v", data, err)
+	}
+}
+
+func TestVerifyModuleSourceRejectsPublicProxyByteMismatch(t *testing.T) {
+	work, mod, result, _ := moduleSourceFixture(t)
+	mismatched := filepath.Join(t.TempDir(), "different.zip")
+	data, err := os.ReadFile(result.Zip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 1
+	aggregateWriteFile(t, mismatched, data)
+	fetchPublicModuleZip = func(_ context.Context, _ string, _ module.Version, _ string, _ int) (string, error) {
+		return mismatched, nil
+	}
+	if _, err := verifyModuleSource(context.Background(), work, mod, "20261019", 0, result); err == nil || !strings.Contains(err.Error(), "bytes differ") {
+		t.Fatalf("different public Source bytes were accepted: %v", err)
 	}
 }
 
@@ -92,7 +172,7 @@ func TestVerifyModuleSourceRejectsInconsistentArtifacts(t *testing.T) {
 			}
 			aggregateWriteFile(t, result.Zip, data)
 			requested := module.Version{Path: result.Path, Version: result.Version}
-			if _, err := verifyModuleSource(work, requested, "20261019", 0, result); err == nil {
+			if _, err := verifyModuleSource(context.Background(), work, requested, "20261019", 0, result); err == nil {
 				t.Fatal("accepted inconsistent or unsafe source")
 			}
 		})
@@ -190,6 +270,54 @@ func TestModuleZIPExtractionChecks(t *testing.T) {
 	}
 }
 
+func TestModuleZIPRejectsLocalCRCAndSizesWithoutDescriptor(t *testing.T) {
+	name := "example.test/a@v1.0.0/file"
+	for _, field := range []string{"crc", "compressed-size", "uncompressed-size"} {
+		t.Run(field, func(t *testing.T) {
+			data := rawStoredZIP(name, []byte("payload"), false, false)
+			switch field {
+			case "crc":
+				binary.LittleEndian.PutUint32(data[14:], 0x12345678)
+			case "compressed-size":
+				binary.LittleEndian.PutUint32(data[18:], 99)
+			case "uncompressed-size":
+				binary.LittleEndian.PutUint32(data[22:], 99)
+			}
+			path := filepath.Join(t.TempDir(), "mismatch.zip")
+			aggregateWriteFile(t, path, data)
+			if err := checkModuleZipExtraction(path); err == nil || !strings.Contains(err.Error(), "local CRC or size") {
+				t.Fatalf("local %s mismatch was accepted: %v", field, err)
+			}
+		})
+	}
+}
+
+func TestModuleZIPRejectsCorruptAndTruncatedDataDescriptors(t *testing.T) {
+	name := "example.test/a@v1.0.0/file"
+	for _, kind := range []string{"crc", "compressed-size", "uncompressed-size", "truncated"} {
+		t.Run(kind, func(t *testing.T) {
+			data := rawStoredZIP(name, []byte("payload"), true, true)
+			descriptorOffset := 30 + len(name) + len("payload")
+			switch kind {
+			case "crc":
+				binary.LittleEndian.PutUint32(data[descriptorOffset+4:], 0x12345678)
+			case "compressed-size":
+				binary.LittleEndian.PutUint32(data[descriptorOffset+8:], 99)
+			case "uncompressed-size":
+				binary.LittleEndian.PutUint32(data[descriptorOffset+12:], 99)
+			case "truncated":
+				data = data[:descriptorOffset+8]
+			}
+			path := filepath.Join(t.TempDir(), "descriptor.zip")
+			aggregateWriteFile(t, path, data)
+			if err := checkModuleZipExtraction(path); err == nil {
+				t.Fatalf("descriptor %s corruption was accepted", kind)
+			} else if kind != "truncated" && !strings.Contains(err.Error(), "data descriptor") {
+				t.Fatalf("descriptor %s corruption failed for the wrong reason: %v", kind, err)
+			}
+		})
+	}
+}
 func TestModuleZIPRejectsLocalExtraOnly(t *testing.T) {
 	_, mod, result, files := moduleSourceFixture(t)
 	data := aggregateZIP(t, mod, files)

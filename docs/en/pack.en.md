@@ -125,7 +125,10 @@ with `GOWORK=off` and `GOTOOLCHAIN=local`. User Go network/checksum settings are
 respected. Returned identity, `.info`, the module directive, and the ZIP's own
 `go.mod` are checked; contradictory optional Origin tags/pseudo-version hashes
 are rejected. SHA256 pins bytes, not independently authenticated release identity.
-The trust in the download still depends on the configured Go proxy/checksum policy.
+The generated public Source URL is fetched and its exact ZIP bytes are compared with the local
+validation download before publication. A proxy that serves a different ZIP, or a direct-only
+module that is not available from `proxy.golang.org`, fails rather than emitting a checksum that
+OBS would later reject.
 
 The spec records canonical Go versions separately from RPM-compatible module
 versions in a complete two-column `go_submodules` table. Releases lose the leading
@@ -154,8 +157,10 @@ Without `-license`, metadata is requested for each **exact module version**, and
 all recognized source license files must match it (apart from CRLF normalization).
 Missing/inconsistent metadata is an error, not a `TODO` license. Use `-license`
 only after reviewing all source licenses; syntax checks are not legal review.
-Modules matching Go's `GOPRIVATE` setting require `-license`; their paths are not
-sent to the public metadata service.
+Modules matching any of Go's private-module protection settings—`GOPRIVATE`, `GONOPROXY`, or
+`GONOSUMDB`—cannot use this mode's public Go Module Proxy `SourceN` URLs. The tool
+requires a future private Source workflow and does not send such paths to public license
+metadata. Supplying `-license` does not override this Source safety restriction.
 `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` and their dot/hyphen/underscore variants
 are retained under separate per-module license directories.
 

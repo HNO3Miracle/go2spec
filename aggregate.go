@@ -392,16 +392,14 @@ func selectedModuleRequirementError(plan aggregatePlan) error {
 
 func buildAggregatePlan(ctx context.Context, req aggregateRequest, work string) (aggregatePlan, error) {
 	plan := aggregatePlan{Request: req, GoVersion: "1.16"}
-	if req.License == "" {
-		patterns, err := effectivePrivatePatterns(ctx, work)
-		if err != nil {
-			return plan, err
-		}
-		for _, mod := range req.Modules {
-			for _, pattern := range patterns {
-				if pattern != "" && module.MatchPrefixPatterns(pattern, mod.Path) {
-					return plan, fmt.Errorf("%s: Go private-module configuration (GOPRIVATE/GONOPROXY/GONOSUMDB) requires a reviewed -license expression; no public metadata lookup performed", mod.Path)
-				}
+	patterns, err := effectivePrivatePatterns(ctx, work)
+	if err != nil {
+		return plan, err
+	}
+	for _, mod := range req.Modules {
+		for _, pattern := range patterns {
+			if pattern != "" && module.MatchPrefixPatterns(pattern, mod.Path) {
+				return plan, fmt.Errorf("%s: Go private-module configuration (GOPRIVATE/GONOPROXY/GONOSUMDB) cannot use the public Module Proxy Source URL; a private Source workflow is required even when -license is supplied", mod.Path)
 			}
 		}
 	}
