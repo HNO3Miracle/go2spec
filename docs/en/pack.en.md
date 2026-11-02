@@ -172,8 +172,11 @@ unconditional dependency. Standard packages and actual internal libraries are no
 external dependencies. External imports retain their **full package path** in `go(path)`
 capabilities; test/command/example-only dependencies are build-only unless also needed by a
 delivered library. A required but unselected nested module is external, not silently bundled.
-This is not MVS, provider lookup, or proof that the target repository contains API-compatible
-dependencies. Review the result against the target Go version/build tags and rebuild when they change.
+This is not MVS or proof that the target repository contains API-compatible dependencies. To
+inspect repository availability separately, use [`repo-query`](repo-query.en.md) with an explicit
+distro, repository URL and architecture. The diagnostic reads RPM `go(...)` Provides from the
+selected repository; it does not modify this spec or infer RPM EVR compatibility from a Go Module
+version.
 
 The spec installs all selected source trees first, then calls
 `%go_generate_provides` once. It does not write ordinary `Provides` by hand or
@@ -196,10 +199,11 @@ not sandbox network calls made by the upstream tests themselves.
   Real openRuyi builds must still verify tests, installed markers, owning RPMs and
   header capabilities. A successful generation or shell-layout test is not that
   acceptance test.
-- No automatic module selection, target-repository provider resolution, full
-  module-graph compatibility solver or combined-spec update is implemented.
-  The [legacy updater refuses marked combined specs](update.en.md#aggregate-specs-are-unsupported),
-  including dry runs; do not remove `%global go2spec_combine 1` to bypass it.
+- No automatic module selection, full module-graph compatibility solver or combined-spec update is implemented.
+  The separate `repo-query` command can diagnose an explicitly selected target repository, but it does
+  not resolve providers during `pack` or modify this spec. The [legacy updater refuses marked
+  combined specs](update.en.md#aggregate-specs-are-unsupported), including dry runs; do not remove
+  `%global go2spec_combine 1` to bypass it.
 
 ## Native RPM Acceptance Test
 

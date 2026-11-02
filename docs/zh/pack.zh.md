@@ -156,8 +156,12 @@ build tags 和基线 CPU 特性，清空自定义 `GOFLAGS`、`GOEXPERIMENT`。�
 不会把 arch-only provider 无条件写成所有架构都需要。标准库和实际交付的内部 library 不生成
 外部依赖；外部依赖保留**完整 package import path**，形成 `go(path)`。仅测试、命令、example
 使用的依赖只进入 BuildRequires；若交付的库也需要它，则进入 Requires。被 require、但未选入
-本 RPM 的 nested module 仍是外部依赖，不能按同仓库前缀误删。这不是 MVS、provider 查询，
-也不证明目标仓库有 API 兼容的依赖；需要对照目标 Go 版本/build tags 审查，变化后重新验证。
+本 RPM 的 nested module 仍是外部依赖，不能按同仓库前缀误删。
+
+这不是 MVS，也不证明目标仓库存在 API 兼容的依赖。若要单独检查仓库复用情况，可使用
+[`repo-query`](repo-query.zh.md)，并明确提供发行版、仓库 URL 和架构。该诊断读取指定仓库的
+RPM `go(...)` Provides，不修改本 spec，也不会根据 Go Module 版本推断 RPM EVR 兼容性。
+
 
 spec 先装齐各份源码，再调用一次 `%go_generate_provides`，不手写普通 Provides，
 不因为根路径存在就虚构 root capability。显式 `%install` 替代默认单源码树安装。
@@ -175,8 +179,9 @@ spec 先装齐各份源码，再调用一次 `%go_generate_provides`，不手写
 - 目标构建环境需要 `go-rpm-macros >= 0.3`、`go`、`coreutils`、`unzip`。仍须在真实
   openRuyi 环境构建，检查测试、安装后的 marker、归属 RPM 和 header capability。
   生成成功或源码布局脚本测试通过，不等于这项验收通过。
-- 暂不实现自动选择 module、目标仓库 provider 查询、完整 module graph 兼容性求解
-  和逐 module 更新。[旧 updater 会拒绝带标记的合并 spec](update.zh.md#不支持聚合-spec)，
+- 暂不实现自动选择 module、完整 module graph 兼容性求解和逐 module 更新。独立的
+  `repo-query` 命令可以诊断明确指定的目标仓库，但不会在 `pack` 中自动解析 provider，
+  也不会修改本 spec。[旧 updater 会拒绝带标记的合并 spec](update.zh.md#不支持聚合-spec)，
   dry run 也拒绝；不要删除 `%global go2spec_combine 1` 绕过保护。
 
 ## 真实 RPM 验收

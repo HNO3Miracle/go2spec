@@ -53,6 +53,21 @@ See [combined packing, output and initial limits](docs/en/pack.en.md#combine-ind
 Combined specs require `go-rpm-macros >= 0.3` and manual build review. The legacy
 updater refuses them, including in dry-run mode.
 
+### Diagnose dependencies against an RPM repository
+
+`repo-query` checks exact `go(import/path)` capabilities in an explicitly selected RPM repository and architecture. It does not use the host rpmdb, modify specs, or treat Go Module versions as RPM EVR versions.
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --require 'go(aead.dev/mem)>=0:0.2.0' \
+  --format text
+```
+
+Use `--spec` to diagnose the `go(...)` BuildRequires/Requires emitted by a generated spec. See [repository query documentation](docs/en/repo-query.en.md) for metadata checks, signature policy, result states, and reproducibility.
+
 ### Check existing spec updates without writing files
 
 ```bash
@@ -75,6 +90,7 @@ go2spec update -j 4 /path/to/SPECS
 |---|---|---|
 | Main README | [README.md](README.md) | [README.zh.md](docs/zh/README.zh.md) |
 | `pack` command | [docs/en/pack.en.md](docs/en/pack.en.md) | [docs/zh/pack.zh.md](docs/zh/pack.zh.md) |
+| `repo-query` command | [docs/en/repo-query.en.md](docs/en/repo-query.en.md) | [docs/zh/repo-query.zh.md](docs/zh/repo-query.zh.md) |
 | `update` command | [docs/en/update.en.md](docs/en/update.en.md) | [docs/zh/update.zh.md](docs/zh/update.zh.md) |
 
 ## Contributing

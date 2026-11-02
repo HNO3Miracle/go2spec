@@ -53,6 +53,21 @@ OBS service 在源码准备阶段下载，不需要把 ZIP 提交到仓库。不
 目标环境需要 `go-rpm-macros >= 0.3`，仍须人工审查与构建验证。旧 updater 会拒绝
 这种合并 spec，dry run 也不例外。
 
+### 针对 RPM 仓库诊断 Go 依赖
+
+`repo-query` 针对显式指定的 RPM 仓库和架构查询精确的 `go(import/path)` capability。它不读取宿主 rpmdb，不修改 spec，也不把 Go Module 版本直接当作 RPM EVR 比较。
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --require 'go(aead.dev/mem)>=0:0.2.0' \
+  --format text
+```
+
+也可以通过 `--spec` 诊断生成 spec 中的 `go(...)` BuildRequires/Requires。metadata 校验、签名策略、结果状态和复现方式见[仓库查询文档](docs/zh/repo-query.zh.md)。
+
 ### 不写入文件地检查现有 spec 更新
 
 ```bash
@@ -75,6 +90,7 @@ go2spec update -j 4 /path/to/SPECS
 |---|---|---|
 | 主 README | [README.md](README.md) | [README.zh.md](README.zh.md) |
 | `pack` 命令 | [docs/en/pack.en.md](docs/en/pack.en.md) | [docs/zh/pack.zh.md](docs/zh/pack.zh.md) |
+| `repo-query` 命令 | [docs/en/repo-query.en.md](docs/en/repo-query.en.md) | [docs/zh/repo-query.zh.md](docs/zh/repo-query.zh.md) |
 | `update` 命令 | [docs/en/update.en.md](docs/en/update.en.md) | [docs/zh/update.zh.md](docs/zh/update.zh.md) |
 
 ## 贡献
