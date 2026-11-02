@@ -29,6 +29,19 @@ go-golang-x-net/go-golang-x-net.spec
     并发检查数量，默认 3
 ```
 
+## 不支持聚合 spec
+
+旧 updater 只更新一个 `Version` 和 `Source0`，不能用于独立发布版本的多模块聚合
+spec。扫描范围 `go-*/*.spec` 中只要有 spec 包含字面的
+`%global go2spec_combine ...` 或 `%define go2spec_combine ...` 定义，命令就会报告
+`unsupported`，并在任何网络请求或文件更新前以非零状态返回。`-n`（dry run）也
+同样拒绝；即使扫描目录同时包含普通 spec，也会拒绝整个扫描批次。
+
+这里只检查定义是否存在，不求值：值为 `0`、空值或位于条件分支中的定义也会被
+拒绝。不执行 RPM 宏、shell、Lua 或条件判断。`# %global go2spec_combine 1` 这类
+注释中的示例不是标记。直接调用更新入口也会拒绝带标记的文件；无标记 spec
+保留原行为。不要删除标记来绕过保护，聚合感知的 updater 尚未实现。
+
 ## 推荐流程
 
 先执行 dry run：

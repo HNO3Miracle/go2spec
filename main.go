@@ -49,13 +49,13 @@ func main() {
 		// Placeholder for the pack command implementation
 		fmt.Println("Executing 'pack' command...")
 		// Actual packing logic would go here
-		mainPack(args[1:], nil)
+		os.Exit(mainPack(args[1:], nil))
 	case "update":
 		os.Exit(mainUpdate(args[1:]))
 	default:
 		// Default to 'pack' command if no command is provided
 		fmt.Println("No command provided. Defaulting to 'pack' command...")
 		// Actual packing logic would go here
-		mainPack(args, printHelp)
+		os.Exit(mainPack(args, printHelp))
 	}
 }

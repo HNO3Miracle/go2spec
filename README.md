@@ -41,6 +41,18 @@ go-golang-x-net/go-golang-x-net.spec
 go-golang-x-net_<version>.orig.tar.<gz|xz>
 ```
 
+### Combine separately versioned modules
+
+`pack -combine <import-root> -url <project-homepage> -package_name <name> -package_version <version>`
+combines explicit `module@version` inputs into **one library source RPM spec**. Each `SourceN`
+uses a fixed Go Module Proxy URL with a `#!RemoteAsset` checksum; OBS source services download
+these archives during source preparation, so ZIPs are not committed to the packaging repository.
+Ordinary multiple-argument packing remains separate packages.
+
+See [combined packing, output and initial limits](docs/en/pack.en.md#combine-independent-module-releases-into-one-rpm).
+Combined specs require `go-rpm-macros >= 0.3` and manual build review. The legacy
+updater refuses them, including in dry-run mode.
+
 ### Check existing spec updates without writing files
 
 ```bash
