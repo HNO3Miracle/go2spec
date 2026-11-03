@@ -37,6 +37,12 @@ func cachedRPMEVRComparator(compare rpmEVRComparator) rpmEVRComparator {
 }
 
 func compareRPMEVR(ctx context.Context, left, right rpmEVR) (int, error) {
+	if err := validateRPMEVR(left); err != nil {
+		return 0, fmt.Errorf("invalid left RPM EVR: %w", err)
+	}
+	if err := validateRPMEVR(right); err != nil {
+		return 0, fmt.Errorf("invalid right RPM EVR: %w", err)
+	}
 	leftEpoch, err := strconv.ParseUint(normalizeEpoch(left.Epoch), 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid RPM epoch %q: %w", left.Epoch, err)

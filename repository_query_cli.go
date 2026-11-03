@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 
 	"golang.org/x/mod/module"
@@ -48,6 +49,10 @@ func mainRepositoryQuery(args []string) int {
 		log.Printf("repo-query: unsupported format %q", format)
 		return 2
 	}
+	if strings.TrimSpace(arch) == "" {
+		log.Print("repo-query: --arch must be specified")
+		return 2
+	}
 	if specPath == "" && len(flags.Args()) == 0 && len(explicitRequirements) == 0 {
 		log.Print("repo-query: provide --spec, capability arguments, or --require")
 		return 2
@@ -69,7 +74,7 @@ func mainRepositoryQuery(args []string) int {
 		log.Print("repo-query: --repository-url is required when --repository is an identity")
 		return 2
 	}
-	dependencies, specErrors, err := queryDependenciesFromInputs(specPath, flags.Args(), explicitRequirements, moduleRequirements)
+	dependencies, specErrors, err := queryDependenciesFromInputs(specPath, arch, flags.Args(), explicitRequirements, moduleRequirements)
 	if err != nil {
 		log.Printf("repo-query: %v", err)
 		return 2
@@ -86,6 +91,8 @@ func mainRepositoryQuery(args []string) int {
 	}
 	report := diagnoseRepositoryDependencies(ctx, catalog, dependencies, cachedRPMEVRComparator(compareRPMEVR))
 	report.Errors = append(report.Errors, specErrors...)
+	slices.Sort(report.Errors)
+	report.Errors = slices.Compact(report.Errors)
 	if format == "json" {
 		data, err := reportJSON(report)
 		if err != nil {
@@ -105,11 +112,11 @@ func mainRepositoryQuery(args []string) int {
 	return 0
 }
 
-func queryDependenciesFromInputs(specPath string, capabilities, explicitRequirements, moduleRequirements []string) ([]repositoryDependency, []string, error) {
+func queryDependenciesFromInputs(specPath, arch string, capabilities, explicitRequirements, moduleRequirements []string) ([]repositoryDependency, []string, error) {
 	var dependencies []repositoryDependency
 	var errorsFound []string
 	if specPath != "" {
-		specDependencies, specErrors, err := readRepositorySpec(specPath)
+		specDependencies, specErrors, err := readRepositorySpec(specPath, arch)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read spec: %w", err)
 		}
@@ -141,6 +148,8 @@ func queryDependenciesFromInputs(specPath string, capabilities, explicitRequirem
 		}
 		modules = append(modules, moduleVersion)
 	}
-	attachRepositoryModuleRequirements(dependencies, modules)
+	errorsFound = append(errorsFound, attachRepositoryModuleRequirements(dependencies, modules)...)
+	slices.Sort(errorsFound)
+	errorsFound = slices.Compact(errorsFound)
 	return dependencies, errorsFound, nil
 }

@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "snapshot": {
+    "distro": "openruyi",
+    "repository": "repo.build.openruyi.cn/openruyi/riscv64",
+    "base_url": "https://repo.build.openruyi.cn/openruyi/riscv64/",
+    "arch": "riscv64",
+    "revision": "1793673044",
+    "repomd_sha256": "535da625f8289c06b34374ec2c228f4f971aa84ddb10fdb0e9511eceac032f5f",
+    "primary_url": "https://repo.build.openruyi.cn/openruyi/riscv64/repodata/c63d154be21c4ad73d0a0f1b4bdd97a9659bcc0095de39386c69e355e7b5c602-primary.xml.gz",
+    "primary_checksum_type": "sha256",
+    "primary_checksum": "c63d154be21c4ad73d0a0f1b4bdd97a9659bcc0095de39386c69e355e7b5c602",
+    "primary_open_checksum_type": "sha256",
+    "primary_open_checksum": "f33c79db47ad1637d98e5ac86a9169217b25b59d1ab3434fc54e3209ded699ab",
+    "primary_open_checksum_status": "verified",
+    "primary_size": 6294398,
+    "primary_open_size": 72941817,
+    "package_count": 34546,
+    "signature_status": "verified",
+    "signature_fingerprint": "51101B1408F35F75BE9C12807447DA4C8D2E5D3A"
+  },
+  "dependencies": [
+    {
+      "capability": "go(aead.dev/mem)",
+      "scope": "explicit",
+      "status": "satisfied",
+      "reason": "provider satisfies the explicit RPM EVR requirement",
+      "rpm_requirement": {
+        "operator": ">=",
+        "evr": {
+          "epoch": "0",
+          "version": "0.2.0"
+        }
+      },
+      "providers": [
+        {
+          "capability": "go(aead.dev/mem)",
+          "package": "go-aead-dev-mem",
+          "arch": "noarch",
+          "package_evr": {
+            "epoch": "0",
+            "version": "0.2.0",
+            "release": "3.19.or"
+          },
+          "provide_flags": "EQ",
+          "provide_evr": {
+            "epoch": "0",
+            "version": "0.2.0"
+          },
+          "location": "noarch/go-aead-dev-mem-0.2.0-3.19.or.noarch.rpm"
+        }
+      ],
+      "provider_checks": [
+        {
+          "provider": {
+            "capability": "go(aead.dev/mem)",
+            "package": "go-aead-dev-mem",
+            "arch": "noarch",
+            "package_evr": {
+              "epoch": "0",
+              "version": "0.2.0",
+              "release": "3.19.or"
+            },
+            "provide_flags": "EQ",
+            "provide_evr": {
+              "epoch": "0",
+              "version": "0.2.0"
+            },
+            "location": "noarch/go-aead-dev-mem-0.2.0-3.19.or.noarch.rpm"
+          },
+          "status": "satisfied",
+          "reason": "provider satisfies the explicit RPM EVR requirement"
+        }
+      ]
+    },
+    {
+      "capability": "go(example.test/missing)",
+      "scope": "explicit",
+      "status": "missing",
+      "reason": "no exact go(...) provider exists for the selected repository and architecture",
+      "rpm_requirement": {
+        "operator": ">=",
+        "evr": {
+          "epoch": "0",
+          "version": "1"
+        }
+      }
+    }
+  ]
+}

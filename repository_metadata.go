@@ -46,22 +46,23 @@ type repositoryOptions struct {
 }
 
 type repositorySnapshot struct {
-	Distro                  string `json:"distro"`
-	Repository              string `json:"repository"`
-	BaseURL                 string `json:"base_url"`
-	Arch                    string `json:"arch"`
-	Revision                string `json:"revision"`
-	RepomdSHA256            string `json:"repomd_sha256"`
-	PrimaryURL              string `json:"primary_url"`
-	PrimaryChecksumType     string `json:"primary_checksum_type"`
-	PrimaryChecksum         string `json:"primary_checksum"`
-	PrimaryOpenChecksumType string `json:"primary_open_checksum_type"`
-	PrimaryOpenChecksum     string `json:"primary_open_checksum"`
-	PrimarySize             int64  `json:"primary_size"`
-	PrimaryOpenSize         int64  `json:"primary_open_size"`
-	PackageCount            int    `json:"package_count"`
-	SignatureStatus         string `json:"signature_status"`
-	SignatureFingerprint    string `json:"signature_fingerprint,omitempty"`
+	Distro                    string `json:"distro"`
+	Repository                string `json:"repository"`
+	BaseURL                   string `json:"base_url"`
+	Arch                      string `json:"arch"`
+	Revision                  string `json:"revision"`
+	RepomdSHA256              string `json:"repomd_sha256"`
+	PrimaryURL                string `json:"primary_url"`
+	PrimaryChecksumType       string `json:"primary_checksum_type"`
+	PrimaryChecksum           string `json:"primary_checksum"`
+	PrimaryOpenChecksumType   string `json:"primary_open_checksum_type,omitempty"`
+	PrimaryOpenChecksum       string `json:"primary_open_checksum,omitempty"`
+	PrimaryOpenChecksumStatus string `json:"primary_open_checksum_status"`
+	PrimarySize               int64  `json:"primary_size"`
+	PrimaryOpenSize           int64  `json:"primary_open_size,omitempty"`
+	PackageCount              int    `json:"package_count"`
+	SignatureStatus           string `json:"signature_status"`
+	SignatureFingerprint      string `json:"signature_fingerprint,omitempty"`
 }
 
 type rpmEVR struct {
@@ -92,12 +93,12 @@ type repomdDocument struct {
 }
 
 type repomdRecord struct {
-	Type         string         `xml:"type,attr"`
-	Checksum     repomdChecksum `xml:"checksum"`
-	OpenChecksum repomdChecksum `xml:"open-checksum"`
-	Location     repomdLocation `xml:"location"`
-	Size         int64          `xml:"size"`
-	OpenSize     int64          `xml:"open-size"`
+	Type         string          `xml:"type,attr"`
+	Checksum     repomdChecksum  `xml:"checksum"`
+	OpenChecksum *repomdChecksum `xml:"open-checksum"`
+	Location     repomdLocation  `xml:"location"`
+	Size         int64           `xml:"size"`
+	OpenSize     *int64          `xml:"open-size"`
 }
 
 type repomdChecksum struct {
@@ -237,10 +238,15 @@ func loadRepositoryCatalog(ctx context.Context, rawOptions repositoryOptions) (r
 	snapshot.PrimaryURL = primaryURL
 	snapshot.PrimaryChecksumType = strings.ToLower(primary.Checksum.Type)
 	snapshot.PrimaryChecksum = strings.ToLower(strings.TrimSpace(primary.Checksum.Value))
-	snapshot.PrimaryOpenChecksumType = strings.ToLower(primary.OpenChecksum.Type)
-	snapshot.PrimaryOpenChecksum = strings.ToLower(strings.TrimSpace(primary.OpenChecksum.Value))
+	snapshot.PrimaryOpenChecksumStatus = "not-provided"
 	snapshot.PrimarySize = primary.Size
-	snapshot.PrimaryOpenSize = primary.OpenSize
+	if hasRepomdChecksum(primary.OpenChecksum) {
+		snapshot.PrimaryOpenChecksumType = strings.ToLower(primary.OpenChecksum.Type)
+		snapshot.PrimaryOpenChecksum = strings.ToLower(strings.TrimSpace(primary.OpenChecksum.Value))
+	}
+	if primary.OpenSize != nil {
+		snapshot.PrimaryOpenSize = *primary.OpenSize
+	}
 	if err := validateRepomdRecord(primary); err != nil {
 		return repositoryCatalog{}, err
 	}
@@ -271,12 +277,22 @@ func loadRepositoryCatalog(ctx context.Context, rawOptions repositoryOptions) (r
 	}
 
 	openPath := filepath.Join(work, "primary.xml")
-	openSize, openDigest, err := expandPrimaryMetadata(compressedPath, primary.Location.Href, openPath, maxPrimaryOpenBytes, primary.OpenChecksum.Type)
+	openChecksumType := ""
+	if hasRepomdChecksum(primary.OpenChecksum) {
+		openChecksumType = primary.OpenChecksum.Type
+	}
+	openSize, openDigest, err := expandPrimaryMetadata(compressedPath, primary.Location.Href, openPath, maxPrimaryOpenBytes, openChecksumType)
 	if err != nil {
 		return repositoryCatalog{}, fmt.Errorf("expand primary metadata: %w", err)
 	}
-	if openSize != primary.OpenSize || openDigest != strings.ToLower(strings.TrimSpace(primary.OpenChecksum.Value)) {
-		return repositoryCatalog{}, fmt.Errorf("primary metadata open size/checksum does not match repomd.xml")
+	if primary.OpenSize != nil && openSize != *primary.OpenSize {
+		return repositoryCatalog{}, fmt.Errorf("primary metadata open size does not match repomd.xml")
+	}
+	if hasRepomdChecksum(primary.OpenChecksum) {
+		if openDigest != strings.ToLower(strings.TrimSpace(primary.OpenChecksum.Value)) {
+			return repositoryCatalog{}, fmt.Errorf("primary metadata open checksum does not match repomd.xml")
+		}
+		snapshot.PrimaryOpenChecksumStatus = "verified"
 	}
 
 	file, err := os.Open(openPath)
@@ -314,26 +330,40 @@ func findPrimaryRecord(records []repomdRecord) (repomdRecord, error) {
 }
 
 func validateRepomdRecord(record repomdRecord) error {
-	if record.Size <= 0 || record.Size > maxPrimaryBytes || record.OpenSize <= 0 || record.OpenSize > maxPrimaryOpenBytes {
-		return fmt.Errorf("primary metadata sizes are missing or exceed configured limits")
+	if record.Size <= 0 || record.Size > maxPrimaryBytes {
+		return fmt.Errorf("primary compressed size is missing or exceeds configured limits")
+	}
+	if record.OpenSize != nil && (*record.OpenSize <= 0 || *record.OpenSize > maxPrimaryOpenBytes) {
+		return fmt.Errorf("primary open size is invalid or exceeds configured limits")
 	}
 	if record.Location.Href == "" {
 		return fmt.Errorf("primary metadata location is missing")
 	}
-	if _, err := newDigest(record.Checksum.Type); err != nil {
-		return fmt.Errorf("primary compressed checksum: %w", err)
+	if err := validateRepomdChecksum("compressed", record.Checksum); err != nil {
+		return err
 	}
-	if _, err := newDigest(record.OpenChecksum.Type); err != nil {
-		return fmt.Errorf("primary open checksum: %w", err)
-	}
-	for _, checksum := range []repomdChecksum{record.Checksum, record.OpenChecksum} {
-		h, _ := newDigest(checksum.Type)
-		raw, err := hex.DecodeString(strings.TrimSpace(checksum.Value))
-		if err != nil || len(raw) != h.Size() {
-			return fmt.Errorf("primary %s checksum has an invalid value", checksum.Type)
+	if record.OpenChecksum != nil {
+		if err := validateRepomdChecksum("open", *record.OpenChecksum); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateRepomdChecksum(kind string, checksum repomdChecksum) error {
+	h, err := newDigest(checksum.Type)
+	if err != nil {
+		return fmt.Errorf("primary %s checksum: %w", kind, err)
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(checksum.Value))
+	if err != nil || len(raw) != h.Size() {
+		return fmt.Errorf("primary %s checksum has an invalid value", kind)
+	}
+	return nil
+}
+
+func hasRepomdChecksum(checksum *repomdChecksum) bool {
+	return checksum != nil
 }
 
 func resolveMetadataURL(base, href string) (string, error) {
@@ -345,7 +375,7 @@ func resolveMetadataURL(base, href string) (string, error) {
 		return "", fmt.Errorf("primary metadata location %q must be a relative path", href)
 	}
 	decoded, err := url.PathUnescape(ref.EscapedPath())
-	if err != nil || path.Clean(decoded) != decoded || decoded == "." || strings.HasPrefix(decoded, "../") {
+	if err != nil || strings.ContainsAny(decoded, "\\\r\n\x00") || path.Clean(decoded) != decoded || decoded == "." || decoded == ".." || strings.HasPrefix(decoded, "../") {
 		return "", fmt.Errorf("primary metadata location %q is not a safe relative path", href)
 	}
 	baseURL, err := url.Parse(base)
@@ -470,12 +500,17 @@ func expandPrimaryMetadata(compressedPath, href, dest string, max int64, algorit
 	if err != nil {
 		return 0, "", err
 	}
-	h, err := newDigest(algorithm)
-	if err != nil {
-		_ = output.Close()
-		return 0, "", err
+	var digest hash.Hash
+	writers := []io.Writer{output}
+	if algorithm != "" {
+		digest, err = newDigest(algorithm)
+		if err != nil {
+			_ = output.Close()
+			return 0, "", err
+		}
+		writers = append(writers, digest)
 	}
-	written, copyErr := io.Copy(io.MultiWriter(output, h), io.LimitReader(reader, max+1))
+	written, copyErr := io.Copy(io.MultiWriter(writers...), io.LimitReader(reader, max+1))
 	closeErr := output.Close()
 	if copyErr != nil {
 		return 0, "", copyErr
@@ -486,7 +521,10 @@ func expandPrimaryMetadata(compressedPath, href, dest string, max int64, algorit
 	if written > max {
 		return 0, "", fmt.Errorf("expanded primary metadata exceeds %d-byte limit", max)
 	}
-	return written, hex.EncodeToString(h.Sum(nil)), nil
+	if digest == nil {
+		return written, "", nil
+	}
+	return written, hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func newDigest(algorithm string) (hash.Hash, error) {
@@ -612,7 +650,7 @@ func safeRepositoryLocation(location string) bool {
 		return false
 	}
 	decoded, err := url.PathUnescape(u.EscapedPath())
-	return err == nil && path.Clean(decoded) == decoded && decoded != "." && !strings.HasPrefix(decoded, "../")
+	return err == nil && !strings.ContainsAny(decoded, "\\\r\n\x00") && path.Clean(decoded) == decoded && decoded != "." && decoded != ".." && !strings.HasPrefix(decoded, "../")
 }
 
 func normalizeEpoch(epoch string) string {
@@ -632,6 +670,9 @@ func providerIdentity(provider rpmProvider) string {
 }
 
 func compareRPMProvider(a, b rpmProvider) int {
+	if c := strings.Compare(a.Capability, b.Capability); c != 0 {
+		return c
+	}
 	if c := strings.Compare(a.Package, b.Package); c != 0 {
 		return c
 	}
@@ -646,6 +687,27 @@ func compareRPMProvider(a, b rpmProvider) int {
 	}
 	if c := strings.Compare(a.PackageEVR.Release, b.PackageEVR.Release); c != 0 {
 		return c
+	}
+	if c := strings.Compare(a.Flags, b.Flags); c != 0 {
+		return c
+	}
+	if a.ProvideEVR == nil || b.ProvideEVR == nil {
+		if a.ProvideEVR == nil && b.ProvideEVR != nil {
+			return -1
+		}
+		if a.ProvideEVR != nil && b.ProvideEVR == nil {
+			return 1
+		}
+	} else {
+		if c := strings.Compare(a.ProvideEVR.Epoch, b.ProvideEVR.Epoch); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.ProvideEVR.Version, b.ProvideEVR.Version); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.ProvideEVR.Release, b.ProvideEVR.Release); c != 0 {
+			return c
+		}
 	}
 	return strings.Compare(a.Location, b.Location)
 }

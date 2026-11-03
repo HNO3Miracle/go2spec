@@ -30,12 +30,18 @@ Additional inputs are repeatable:
 
 - `go(import/path)` positional arguments query exact capabilities.
 - `--require 'go(import/path)>=epoch:version-release'` supplies an explicit RPM EVR requirement.
-- `--module-require module/path@canonical-version` records Go Module provenance. Go Module versions are **not** automatically compared with RPM EVR versions.
+- `--module-require module/path@canonical-version` records Go Module provenance. Go Module versions are **not** automatically compared with RPM EVRs; conflicting versions for the same Module path are reported instead of choosing one by input order.
 - `--format text|json` selects the stable human-readable or machine-readable report.
+
+## Spec dependency parsing limits
+
+With `--spec`, go2spec reads literal `BuildRequires` and `Requires` for the requested `--arch`. Simple `%ifarch`, `%ifnarch`, and their `%else` branches are evaluated against that target architecture; the host architecture is not substituted. This bounded parser does not execute RPM macros. Macro-expanded dependency values and conditions it cannot safely evaluate, such as ordinary `%if` or `%elif`, are retained as `unknown` diagnostics and cause a non-zero exit rather than being silently ignored or applied to the wrong architecture. Specs requiring full RPM macro expansion should first be evaluated in the target RPM environment, then queried using explicit literal requirements.
+
+RPM EVR inputs are validated for a decimal Epoch and supported Version/Release characters. Malformed requirements are errors. Repository-provided EVRs receive the same validation before comparison; an invalid or incomparable value cannot be reported as satisfied.
 
 ## Repository trust and metadata
 
-The command downloads `repomd.xml`, verifies its declared primary metadata checksum and compressed/open sizes, limits metadata and decompression sizes, and parses only the `primary` index. It accepts XML and gzip-compressed XML primary metadata. Unsupported compression, malformed XML, missing records, unsafe locations, checksum mismatches, truncated responses, and excessive sizes are errors—not an empty repository.
+The command downloads `repomd.xml`. The primary compressed checksum and size are required and verified. `open-checksum` and `open-size` are optional: each is verified when supplied; when absent, decompression remains size-bounded and the report marks the open checksum as `not-provided`. Reports show the declared checksum algorithms and compressed/open sizes. The command accepts XML and gzip-compressed XML primary metadata. Unsupported compression, malformed XML, missing records, unsafe locations, checksum mismatches, truncated responses, and excessive sizes are errors—not an empty repository.
 
 Use a trusted local keyring when the distribution publishes a repomd signature:
 
@@ -57,10 +63,10 @@ Each exact `go(import/path)` requirement produces one of:
 
 - `satisfied`: an exact provider satisfies the explicit RPM EVR requirement;
 - `present-no-version-requirement`: one exact provider exists, but no RPM version requirement was supplied;
-- `version-insufficient`: providers exist, but none satisfies the explicit EVR;
+- `version-insufficient`: there is one exact provider, but it does not satisfy the explicit RPM EVR requirement; multiple providers are not collapsed into this state;
 - `missing`: no exact provider exists for the selected architecture or `noarch`;
-- `multiple-providers`: more than one exact provider exists and go2spec will not choose one;
-- `unknown`: the provider has no comparable EVR, the RPM comparator is unavailable, or the input cannot establish a safe comparison.
+- `multiple-providers`: more than one exact provider exists; this status takes precedence regardless of their version comparisons, and `provider_checks` reports each comparison without selecting a provider;
+- `unknown`: the provider has no comparable EVR, the RPM comparator is unavailable, the input/condition/macro cannot be safely resolved, or version semantics are incomparable.
 
 A Go Module requirement is reported as provenance and does not turn a provider into `satisfied`; Go Module and RPM version spaces have different semantics. Query failures return a non-zero exit status and are not converted into `missing` or `satisfied`.
 
@@ -68,4 +74,4 @@ The parser matches the full package capability, not a module-root prefix. For ex
 
 ## Reproducibility and scope
 
-The JSON report sorts dependencies and providers deterministically. The command is diagnostic only: it does not write a spec, create a package, select a newer Module version, or prove API compatibility. Fixed metadata fixtures cover malformed data, checksum/size errors, architecture filtering, duplicate providers, missing providers and incomparable versions. A real openRuyi snapshot is an additional repository-fact check, not a complete dependency-solver result.
+The JSON report sorts dependencies by capability, scope, RPM requirement, and Module provenance; providers are sorted by their complete records. Explicit RPM version requirements include per-provider `provider_checks`, and `go_module` uses `path` and `version` keys. The command is diagnostic only: it does not write a spec, create a package, select a newer Module version, or prove API compatibility. Fixed metadata fixtures cover malformed data, checksum/size errors, architecture filtering, duplicate providers, missing providers and incomparable versions. A real openRuyi snapshot is an additional repository-fact check, not a complete dependency-solver result.

@@ -22,7 +22,7 @@ Requires:       go(example.test/runtime/api)
 	if err := os.WriteFile(name, []byte(spec), 0600); err != nil {
 		t.Fatal(err)
 	}
-	dependencies, errorsFound, err := readRepositorySpec(name)
+	dependencies, errorsFound, err := readRepositorySpec(name, "x86_64")
 	if err != nil || len(errorsFound) != 0 || len(dependencies) != 3 {
 		t.Fatalf("dependencies=%+v errors=%v err=%v", dependencies, errorsFound, err)
 	}
@@ -39,8 +39,8 @@ func TestReadRepositorySpecDoesNotSilentlyDropUnparsedGoDependency(t *testing.T)
 	if err := os.WriteFile(name, []byte("BuildRequires: go(%{dynamic_import_path})\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	dependencies, errorsFound, err := readRepositorySpec(name)
-	if err != nil || len(dependencies) != 1 || len(errorsFound) != 0 || dependencies[0].InputError == "" {
+	dependencies, errorsFound, err := readRepositorySpec(name, "x86_64")
+	if err != nil || len(dependencies) != 1 || len(errorsFound) != 1 || dependencies[0].InputError == "" {
 		t.Fatalf("dependencies=%+v errors=%v err=%v", dependencies, errorsFound, err)
 	}
 }
