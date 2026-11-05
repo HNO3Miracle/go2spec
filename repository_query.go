@@ -167,12 +167,18 @@ func evaluateSpecArchCondition(args []string, targetArch string, negate bool) sp
 		return specConditionUnknown
 	}
 	matched := false
-	for _, arch := range args {
-		if strings.ContainsAny(arch, "%{}()[]") {
+	for _, list := range strings.Split(strings.Join(args, " "), ",") {
+		architectures := strings.Fields(list)
+		if len(architectures) == 0 {
 			return specConditionUnknown
 		}
-		if arch == targetArch {
-			matched = true
+		for _, arch := range architectures {
+			if strings.ContainsAny(arch, "%{}()[]") {
+				return specConditionUnknown
+			}
+			if arch == targetArch {
+				matched = true
+			}
 		}
 	}
 	if negate {
@@ -328,6 +334,7 @@ func attachRepositoryModuleRequirements(dependencies []repositoryDependency, mod
 		}
 		i = j
 	}
+	matchedModules := make(map[module.Version]bool)
 	for i := range dependencies {
 		importPath := strings.TrimSuffix(strings.TrimPrefix(dependencies[i].Capability, "go("), ")")
 		longest := 0
@@ -354,11 +361,21 @@ func attachRepositoryModuleRequirements(dependencies []repositoryDependency, mod
 			}
 			continue
 		}
+		matchedModules[*selected] = true
 		copy := *selected
 		dependencies[i].GoModule = &copy
 	}
+	for _, required := range sortedModules {
+		if matchedModules[required] {
+			continue
+		}
+		if conflict := conflictsByPath[required.Path]; conflict != "" {
+			continue
+		}
+		conflicts = append(conflicts, fmt.Sprintf("--module-require %s@%s does not match any queried Go package capability", required.Path, required.Version))
+	}
 	slices.Sort(conflicts)
-	return conflicts
+	return slices.Compact(conflicts)
 }
 
 func diagnoseRepositoryDependencies(ctx context.Context, catalog repositoryCatalog, dependencies []repositoryDependency, compare rpmEVRComparator) repositoryQueryReport {

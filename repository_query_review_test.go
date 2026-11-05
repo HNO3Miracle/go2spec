@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -200,5 +201,112 @@ func TestRepositoryTextReportUsesChecksumAlgorithmsAndSizes(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Errorf("report omitted %q: %s", expected, text)
 		}
+	}
+}
+
+func TestModuleRequirementReportsUnmatchedAndTracksMatchedVersions(t *testing.T) {
+	dependencies := []repositoryDependency{
+		{Capability: "go(example.test/sdk/pkg)", Scope: "build"},
+		{Capability: "go(example.test/sdk/sub/client)", Scope: "build"},
+	}
+	modules := []module.Version{
+		{Path: "example.test/sdk", Version: "v1.0.0"},
+		{Path: "example.test/sdk/sub", Version: "v2.0.0"},
+		{Path: "example.test/typo", Version: "v1.0.0"},
+	}
+	gotErrors := attachRepositoryModuleRequirements(dependencies, modules)
+	wantError := "--module-require example.test/typo@v1.0.0 does not match any queried Go package capability"
+	if !reflect.DeepEqual(gotErrors, []string{wantError}) {
+		t.Fatalf("unmatched module errors=%v, want %q", gotErrors, wantError)
+	}
+	if dependencies[0].GoModule == nil || dependencies[0].GoModule.Path != "example.test/sdk" {
+		t.Fatalf("root module was not matched: %+v", dependencies[0])
+	}
+	if dependencies[1].GoModule == nil || dependencies[1].GoModule.Path != "example.test/sdk/sub" {
+		t.Fatalf("longest nested module was not selected: %+v", dependencies[1])
+	}
+
+	reversed := append([]module.Version(nil), modules...)
+	slices.Reverse(reversed)
+	reversedDependencies := []repositoryDependency{
+		{Capability: "go(example.test/sdk/pkg)", Scope: "build"},
+		{Capability: "go(example.test/sdk/sub/client)", Scope: "build"},
+	}
+	reversedErrors := attachRepositoryModuleRequirements(reversedDependencies, reversed)
+	if !reflect.DeepEqual(gotErrors, reversedErrors) {
+		t.Fatalf("unmatched module diagnostics depend on input order: %v vs %v", gotErrors, reversedErrors)
+	}
+	if !reflect.DeepEqual(modules, []module.Version{
+		{Path: "example.test/sdk", Version: "v1.0.0"},
+		{Path: "example.test/sdk/sub", Version: "v2.0.0"},
+		{Path: "example.test/typo", Version: "v1.0.0"},
+	}) {
+		t.Fatalf("module input order was mutated: %+v", modules)
+	}
+}
+
+func TestQueryDependenciesReportsUnmatchedModuleRequirement(t *testing.T) {
+	dependencies, errorsFound, err := queryDependenciesFromInputs(
+		"", "x86_64", []string{"go(example.test/queried/pkg)"}, nil,
+		[]string{"example.test/typo@v1.0.0"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dependencies) != 1 || len(errorsFound) != 1 || !strings.Contains(errorsFound[0], "example.test/typo@v1.0.0") {
+		t.Fatalf("unmatched module requirement was not surfaced: dependencies=%+v errors=%v", dependencies, errorsFound)
+	}
+}
+
+func TestReadRepositorySpecEvaluatesCommaSeparatedArchLists(t *testing.T) {
+	spec := `%ifarch x86_64,riscv64
+BuildRequires: go(example.test/positive)
+%endif
+%ifarch x86_64, riscv64
+Requires: go(example.test/positive-spaced)
+%endif
+%ifnarch x86_64,riscv64
+BuildRequires: go(example.test/negative)
+%endif
+%ifnarch aarch64, ppc64le
+Requires: go(example.test/nonmatching-negative)
+%endif
+%ifarch aarch64,ppc64le
+Requires: go(example.test/nonmatching-positive)
+%endif
+`
+	name := filepath.Join(t.TempDir(), "comma-arch.spec")
+	if err := os.WriteFile(name, []byte(spec), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		arch string
+		want []string
+	}{
+		{arch: "x86_64", want: []string{"go(example.test/positive)", "go(example.test/positive-spaced)", "go(example.test/nonmatching-negative)"}},
+		{arch: "riscv64", want: []string{"go(example.test/positive)", "go(example.test/positive-spaced)", "go(example.test/nonmatching-negative)"}},
+	} {
+		dependencies, errorsFound, err := readRepositorySpec(name, tc.arch)
+		if err != nil || len(errorsFound) != 0 {
+			t.Fatalf("arch %s: dependencies=%+v errors=%v err=%v", tc.arch, dependencies, errorsFound, err)
+		}
+		got := make([]string, 0, len(dependencies))
+		for _, dependency := range dependencies {
+			got = append(got, dependency.Capability)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("arch %s dependencies=%v, want %v", tc.arch, got, tc.want)
+		}
+	}
+}
+
+func TestReadRepositorySpecReportsMalformedArchListAsUnknown(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "malformed-arch.spec")
+	if err := os.WriteFile(name, []byte("%ifarch x86_64,,riscv64\nBuildRequires: go(example.test/uncertain)\n%endif\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dependencies, errorsFound, err := readRepositorySpec(name, "x86_64")
+	if err != nil || len(dependencies) != 1 || len(errorsFound) != 1 || dependencies[0].InputError == "" {
+		t.Fatalf("malformed architecture list was not diagnosed: dependencies=%+v errors=%v err=%v", dependencies, errorsFound, err)
 	}
 }
