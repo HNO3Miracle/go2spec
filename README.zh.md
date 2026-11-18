@@ -53,6 +53,16 @@ OBS service 在源码准备阶段下载，不需要把 ZIP 提交到仓库。不
 目标环境需要 `go-rpm-macros >= 0.3`，仍须人工审查与构建验证。旧 updater 会拒绝
 这种合并 spec，dry run 也不例外。
 
+### 辅助筛选多 Module 打包候选
+
+`module-select` 分析一个明确固定版本的 Go Module，列出 Go 依赖图中的候选 Module、Go 选定版本和实际 package import 依据。它只提供建议：不扫描 monorepo 中所有 Module，不自动决定最终打包集合，也不生成或更新 spec。
+
+```bash
+go2spec module-select --format text github.com/Azure/azure-sdk-for-go/sdk/azidentity@v1.8.1
+```
+
+人工审阅候选后，再将选定的 `module@version` 显式传给 `pack -combine`。完整 Azure 示例和范围限制见 [Module 筛选文档](docs/zh/module-select.zh.md)。目前不支持安全更新已有聚合 spec；旧 updater 仍会拒绝此类 spec。
+
 ### 针对 RPM 仓库诊断 Go 依赖
 
 `repo-query` 针对显式指定的 RPM 仓库和架构查询精确的 `go(import/path)` capability。它不读取宿主 rpmdb，不修改 spec，也不把 Go Module 版本直接当作 RPM EVR 比较。
@@ -89,6 +99,7 @@ go2spec update -j 4 /path/to/SPECS
 | 内容 | English | 中文 |
 |---|---|---|
 | 主 README | [README.md](README.md) | [README.zh.md](README.zh.md) |
+| `module-select` 命令 | [docs/en/module-select.en.md](docs/en/module-select.en.md) | [docs/zh/module-select.zh.md](docs/zh/module-select.zh.md) |
 | `pack` 命令 | [docs/en/pack.en.md](docs/en/pack.en.md) | [docs/zh/pack.zh.md](docs/zh/pack.zh.md) |
 | `repo-query` 命令 | [docs/en/repo-query.en.md](docs/en/repo-query.en.md) | [docs/zh/repo-query.zh.md](docs/zh/repo-query.zh.md) |
 | `update` 命令 | [docs/en/update.en.md](docs/en/update.en.md) | [docs/zh/update.zh.md](docs/zh/update.zh.md) |

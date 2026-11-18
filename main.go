@@ -17,8 +17,9 @@ Usage:
   go2spec [command]
 
 Available Commands:
-  pack        Package the Go modules into an RPM spec file
-  repo-query  Diagnose go(...) dependencies against an explicit RPM repository
+  pack          Package Go modules into an RPM spec file
+  module-select Analyze candidates for one pinned Go module
+  repo-query    Diagnose go(...) dependencies against an explicit RPM repository
   update      Check existing Go module spec files for updates
   help        Show this help message
 
@@ -31,7 +32,7 @@ If there are no commands provided, the tool will default to executing the 'pack'
 
 func main() {
 	versionWriter := io.Writer(os.Stdout)
-	if len(os.Args) > 1 && os.Args[1] == "repo-query" {
+	if len(os.Args) > 1 && (os.Args[1] == "repo-query" || os.Args[1] == "module-select") {
 		versionWriter = os.Stderr
 	}
 	printVersion(versionWriter)
@@ -56,6 +57,8 @@ func main() {
 		fmt.Println("Executing 'pack' command...")
 		// Actual packing logic would go here
 		os.Exit(mainPack(args[1:], nil))
+	case "module-select":
+		os.Exit(mainModuleSelection(args[1:]))
 	case "repo-query":
 		os.Exit(mainRepositoryQuery(args[1:]))
 	case "update":

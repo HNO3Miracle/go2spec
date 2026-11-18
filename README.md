@@ -53,6 +53,16 @@ See [combined packing, output and initial limits](docs/en/pack.en.md#combine-ind
 Combined specs require `go-rpm-macros >= 0.3` and manual build review. The legacy
 updater refuses them, including in dry-run mode.
 
+### Review candidates for a multi-Module package
+
+`module-select` analyzes one explicitly pinned Go module and reports Go-selected dependency modules, versions and actual package-import evidence. It is advisory: nested modules are not scanned as part of the project's source tree, candidates are not automatically selected for a package, and no spec is created or updated.
+
+```bash
+go2spec module-select --format text github.com/Azure/azure-sdk-for-go/sdk/azidentity@v1.8.1
+```
+
+Review candidates, then explicitly pass the chosen `module@version` sources to `pack -combine`. See the [module selection guide](docs/en/module-select.en.md) for the public Azure example and scope limitations. Safe updates to existing combined specs are not implemented; the legacy updater continues to refuse them.
+
 ### Diagnose dependencies against an RPM repository
 
 `repo-query` checks exact `go(import/path)` capabilities in an explicitly selected RPM repository and architecture. It does not use the host rpmdb, modify specs, or treat Go Module versions as RPM EVR versions.
@@ -88,7 +98,8 @@ go2spec update -j 4 /path/to/SPECS
 
 | Area | English | Chinese |
 |---|---|---|
-| Main README | [README.md](README.md) | [README.zh.md](docs/zh/README.zh.md) |
+| Main README | [README.md](README.md) | [README.zh.md](README.zh.md) |
+| `module-select` command | [docs/en/module-select.en.md](docs/en/module-select.en.md) | [docs/zh/module-select.zh.md](docs/zh/module-select.zh.md) |
 | `pack` command | [docs/en/pack.en.md](docs/en/pack.en.md) | [docs/zh/pack.zh.md](docs/zh/pack.zh.md) |
 | `repo-query` command | [docs/en/repo-query.en.md](docs/en/repo-query.en.md) | [docs/zh/repo-query.zh.md](docs/zh/repo-query.zh.md) |
 | `update` command | [docs/en/update.en.md](docs/en/update.en.md) | [docs/zh/update.zh.md](docs/zh/update.zh.md) |

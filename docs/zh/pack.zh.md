@@ -78,6 +78,14 @@ go2spec pack \
 
 与其他 Go flag 命令一样，选项放在位置参数之前。
 
+在决定 `module@version` 输入前，维护者可以先分析一个明确固定版本的项目：
+
+```bash
+go2spec module-select --format text github.com/Azure/azure-sdk-for-go/sdk/azidentity@v1.8.1
+```
+
+审阅每个候选的使用依据和 Go 选定版本后，再人工将最终选择的 Source 显式传给 `pack -combine`。该命令不会自动把所有候选加入打包列表，也不会改写用户指定的版本。完整公开项目示例见 [Module 筛选文档](module-select.zh.md)。目前尚不支持更新已有聚合 spec；旧 updater 仍会拒绝带标记的聚合 spec，包括 dry run。
+
 | 选项 | 含义 |
 |---|---|
 | `-combine <import-root>` | 共同的安装路径和 auto-Provides 扫描根；根路径本身可以没有 Go package。 |
@@ -179,10 +187,7 @@ spec 先装齐各份源码，再调用一次 `%go_generate_provides`，不手写
 - 目标构建环境需要 `go-rpm-macros >= 0.3`、`go`、`coreutils`、`unzip`。仍须在真实
   openRuyi 环境构建，检查测试、安装后的 marker、归属 RPM 和 header capability。
   生成成功或源码布局脚本测试通过，不等于这项验收通过。
-- 暂不实现自动选择 module、完整 module graph 兼容性求解和逐 module 更新。独立的
-  `repo-query` 命令可以诊断明确指定的目标仓库，但不会在 `pack` 中自动解析 provider，
-  也不会修改本 spec。[旧 updater 会拒绝带标记的合并 spec](update.zh.md#不支持聚合-spec)，
-  dry run 也拒绝；不要删除 `%global go2spec_combine 1` 绕过保护。
+- 不会自动决定最终 Module 清单，不实现完整 module graph/API 兼容性求解，也**不支持更新已有聚合 spec**。独立的 [`module-select`](module-select.zh.md) 命令可为一个固定版本项目提供候选和使用依据；最终 Source 仍由维护者逐项选择。`repo-query` 可诊断明确指定的目标仓库，但 `pack` 不会自动查询 provider。[旧 updater 会拒绝带标记的合并 spec](update.zh.md#不支持聚合-spec)，dry run 也拒绝；不要删除 `%global go2spec_combine 1` 绕过保护。
 
 ## 真实 RPM 验收
 

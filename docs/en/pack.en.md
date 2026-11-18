@@ -80,6 +80,14 @@ go2spec pack \
 
 Put flags before positional arguments, as with other Go flag-based commands.
 
+Before choosing the `module@version` inputs, maintainers can inspect an explicitly pinned project's dependency candidates:
+
+```bash
+go2spec module-select --format text github.com/Azure/azure-sdk-for-go/sdk/azidentity@v1.8.1
+```
+
+Review its usage evidence and Go-selected versions, then manually pass only the chosen sources to `pack -combine`. The command never expands candidates into a package list or changes a requested version. See [module selection](module-select.en.md) for the complete public example. Updating an existing combined spec is not implemented; the legacy updater continues to reject marked combined specs, including dry runs.
+
 | Flag | Meaning |
 |---|---|
 | `-combine <import-root>` | Common installation and auto-Provides scan root. This need not itself contain a Go package. |
@@ -199,11 +207,7 @@ not sandbox network calls made by the upstream tests themselves.
   Real openRuyi builds must still verify tests, installed markers, owning RPMs and
   header capabilities. A successful generation or shell-layout test is not that
   acceptance test.
-- No automatic module selection, full module-graph compatibility solver or combined-spec update is implemented.
-  The separate `repo-query` command can diagnose an explicitly selected target repository, but it does
-  not resolve providers during `pack` or modify this spec. The [legacy updater refuses marked
-  combined specs](update.en.md#aggregate-specs-are-unsupported), including dry runs; do not remove
-  `%global go2spec_combine 1` to bypass it.
+- No automatic final Module selection, full module-graph/API compatibility solver or combined-spec update is implemented. The separate [`module-select`](module-select.en.md) command provides advisory candidates for one explicitly pinned project; maintainers still choose every Source. The separate `repo-query` command diagnoses an explicitly selected target repository but does not resolve providers during `pack`. The [legacy updater refuses marked combined specs](update.en.md#aggregate-specs-are-unsupported), including dry runs; do not remove `%global go2spec_combine 1` to bypass it.
 
 ## Native RPM Acceptance Test
 
