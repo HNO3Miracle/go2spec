@@ -1,8 +1,60 @@
 # repo-query 命令
 
-`repo-query` 用于诊断显式指定的 RPM 仓库中是否提供 Go RPM capability。它不读取开发机 RPM 数据库，不修改 spec，不选择 Module，也不求解完整依赖图。
+`repo-query` 回答一个具体问题：**指定发行版、仓库和架构里，有没有 RPM 包提供这个 Go package import path？**这里的 Provider 指“提供该 Go package capability 的 RPM 包”。
 
-## 用法
+## 最简单的查询
+
+先给出发行版、仓库 URL、架构，以及要检查的完整 Go package capability：
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  'go(aead.dev/mem)'
+```
+
+`go(aead.dev/mem)` 是一个 capability。它表示 RPM 提供的 Go package import path。
+
+命令也可以一次检查多个 capability：
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --format text \
+  'go(aead.dev/mem)' \
+  'go(golang.org/x/sys/unix)'
+```
+
+`--repository` 可以直接写 HTTPS 仓库根 URL；也可以写仓库名称，并另传 `--repository-url`：
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository openruyi-x86_64 \
+  --repository-url https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  'go(aead.dev/mem)'
+```
+
+`--distro`、`--repository` 和 `--arch` 都必须明确指定，命令不会用开发机上的 rpmdb 代替目标仓库。
+
+## 检查生成 spec 的依赖
+
+`--spec` 会读取 spec 里写明的 Go `BuildRequires`（构建时需要的包）和 `Requires`（安装/运行时需要的包），并按你指定的 `--arch` 查询。
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --spec go-example-sdk/go-example-sdk.spec \
+  --format text
+```
+
+也可以同时提供显式 RPM 版本要求：
 
 ```bash
 go2spec repo-query \
@@ -13,37 +65,38 @@ go2spec repo-query \
   --format text
 ```
 
-`--repository` 可以填写仓库标识或 HTTPS 仓库根 URL。若填写标识，则另外传入 `--repository-url`。`--distro`、`--arch` 和仓库必须明确指定；命令不会回退到开发机 rpmdb。
+这里 `0:0.2.0` 是 RPM EVR：`0` 是 Epoch，`0.2.0` 是 Version。只有明确提供 `--require` 时，工具才会比较 RPM 的 Provide EVR。Go Module 版本不能直接当成 RPM 版本比较。
 
-检查生成 spec 中的 Go 依赖：
+## 如何看结果
 
-```bash
-go2spec repo-query \
-  --distro openruyi \
-  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
-  --arch x86_64 \
-  --spec go-example-sdk/go-example-sdk.spec \
-  --format json
+常见状态如下：
+
+| 状态 | 对使用者的含义 |
+|---|---|
+| `satisfied` | 找到一个精确 Provider，且满足你明确给出的 RPM 版本要求。 |
+| `present-no-version-requirement` | 找到了一个 Provider；你没有要求比较 RPM 版本，所以这只说明“存在”。 |
+| `version-insufficient` | 只有一个 Provider，但它不满足明确的 RPM 版本要求。 |
+| `missing` | 目标架构及 `noarch` 包中都没有这个精确 capability。 |
+| `multiple-providers` | 找到多个 Provider，程序不会擅自替你挑一个；JSON 中的 `provider_checks` 会列出各自版本判断。 |
+| `unknown` | 目前无法安全判断，例如版本信息不完整、RPM 比较器不可用，或 spec 条件/宏不能解析。请查看报告中的 `reason`。 |
+
+文本结果示意：
+
+```text
+Repository: openruyi/x86_64 (openruyi)
+Base URL: https://repo.build.openruyi.cn/openruyi/x86_64/
+Architecture: x86_64
+
+[present-no-version-requirement] explicit: go(aead.dev/mem)
+  reason: an exact provider exists, but no RPM EVR requirement was supplied
+  provider: go-aead-dev-mem.noarch EVR=0.2.0-3.28.or provide=0.2.0 ...
 ```
 
-额外输入可重复指定：
+上面仅展示格式；具体 Provider 和版本以你查询到的仓库快照为准。**`present-no-version-requirement` 不等于版本兼容已经确认。**`missing` 也只表示在所选仓库快照和架构中没有匹配的 capability，不表示上游没有这个 Go Module。
 
-- 位置参数 `go(import/path)`：查询精确 capability。
-- `--require 'go(import/path)>=epoch:version-release'`：显式提供 RPM EVR 版本要求。
-- `--module-require module/path@canonical-version`：记录 Go Module 来源身份。Go Module 版本**不会**自动与 RPM EVR 比较；同一 Module path 指定多个不同版本时会明确报冲突，不会按输入顺序任选一个。
-- `--format text|json`：选择便于阅读或稳定的机器可读报告。
+## 选择仓库签名验证（可选）
 
-## spec 依赖解析边界
-
-`--spec` 按目标 `--arch` 解析字面的 `BuildRequires` 和 `Requires`。简单的 `%ifarch`、`%ifnarch` 及其 `%else` 分支会按目标架构筛选；程序不会使用开发机架构。此解析器不会执行 RPM 宏：宏展开的依赖、普通 `%if`/`%elif` 等无法安全判定的条件会作为 `unknown` 诊断保留，命令返回非零状态，不会静默忽略或套用到错误架构。需要完整 RPM 宏展开的 spec，应先在目标 RPM 环境中解析，再使用明确的字面依赖输入。
-
-RPM EVR 输入会校验十进制 Epoch 及受支持的 Version/Release 字符；格式无效的要求会报错。对仓库提供的 EVR 也使用同样的安全校验，无法比较时不会据此判为满足。
-
-## 仓库信任与 metadata
-
-命令下载 `repomd.xml`，要求 primary 的压缩 checksum 和压缩大小完整，并校验其声明值。`open-checksum` 和 `open-size` 是可选字段：仓库提供哪一项就验证哪一项；缺失时仍限制解压后的最大体积，并在报告中标记 open checksum 为 `not-provided`。报告使用仓库声明的 checksum 算法，并显示压缩/解压大小。目前支持 XML 和 gzip 压缩的 XML primary 索引。压缩格式不支持、XML 损坏、记录缺失、路径不安全、checksum 不符、下载截断或数据过大，都会明确报错，不会伪装成空仓库。
-
-若发行版提供 repomd 签名，使用维护者已经信任的本地 keyring：
+若发行版提供仓库签名，可传入维护者已经信任的本地 keyring，并要求验证：
 
 ```bash
 go2spec repo-query \
@@ -52,26 +105,39 @@ go2spec repo-query \
   --arch x86_64 \
   --gpg-keyring /usr/share/pki/rpm-gpg/RPM-GPG-KEY-openruyi-obs \
   --require-signature \
-  --require 'go(aead.dev/mem)>=0:0.2.0'
+  'go(aead.dev/mem)'
 ```
 
-keyring 必须由维护者事先信任，并可供 `gpgv` 使用；go2spec 不会自动下载或信任远程密钥。不传 `--require-signature` 时，报告会标为 `signature-not-requested`，而不会声称仓库已认证。报告包含发行版、仓库、架构、repomd revision/hash、primary checksum/size 和签名状态，便于复现目标快照。
+keyring 应来自你信任的发行版来源；go2spec 不会下载或自动信任远程密钥。不传 `--require-signature` 时，结果会写明 `signature-not-requested`，不能据此声称仓库来源已认证。
 
-## 结果状态
+## 结果格式与可复现信息
 
-每个精确 `go(import/path)` 依赖会得到以下状态之一：
+- 默认 `--format text`，适合人工阅读；传 `--format json` 可供脚本处理。
+- 报告会记录发行版、仓库 URL、架构、repomd revision/hash、primary metadata checksum/大小和签名状态。
+- JSON 中依赖和 Provider 会稳定排序；因此可以比较不同输入顺序下的同一查询结果。
 
-- `satisfied`：存在一个精确 provider，且满足显式 RPM EVR 要求；
-- `present-no-version-requirement`：存在一个精确 provider，但调用方没有提供 RPM 版本要求；
-- `version-insufficient`：只有一个精确 provider，但它不满足显式 RPM EVR 要求；多个 provider 时不以此状态掩盖 provider 歧义；
-- `missing`：目标架构及 `noarch` 中均没有精确 provider；
-- `multiple-providers`：存在多个精确 provider；无论其版本比较结果如何，程序都不替维护者选择，并在 `provider_checks` 中逐个列出版本判断；
-- `unknown`：provider 没有可比较的 EVR、RPM 比较器不可用、输入格式/条件/宏无法安全解析，或版本语义无法比较。
+## 可选：记录 Go Module 来源版本
 
-Go Module 版本只作为来源信息，不会把 provider 判为 `satisfied`；Go Module 与 RPM 版本处于不同语义空间。查询失败返回非零状态，不会被转换成 `missing` 或 `satisfied`。
+`--module-require` 用于把 Go Module 来源版本作为附加信息关联到 package 查询，不会把 Go 版本换算成 RPM 版本。实际使用时和 capability/version 查询一起传入：
 
-匹配使用完整 package capability，不用 module 根路径前缀推断。例如，`go(example.org/sdk/submarine)` 不满足 `go(example.org/sdk/sub)`。只考虑与目标架构相同或 `noarch` 的二进制包；忽略源码包及其他架构。
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --require 'go(example.org/sdk/sub)' \
+  --module-require example.org/sdk@v1.2.3 \
+  --format json
+```
 
-## 可复现性与范围
+同一个 Module path 若指定多个不同版本，工具会报告冲突，不按参数顺序任选一个。
 
-JSON 报告中的依赖按 capability、范围、RPM 要求和 Module 身份稳定排序；Provider 也按完整记录排序。显式 RPM 版本要求会附带逐 Provider 的 `provider_checks`；`go_module` 使用 `path`、`version` 字段。该命令仅提供诊断：不写 spec、不创建软件包、不选择更新版本，也不证明 API 兼容性。固定 metadata fixture 覆盖损坏数据、checksum/size 错误、架构过滤、重复 provider、依赖缺失和版本不可比较；真实 openRuyi 仓库查询用于补充验证仓库事实，不代表完整依赖求解。
+## `--spec` 的解析范围
+
+`--spec` 按指定的 `--arch` 处理字面的 `BuildRequires` 和 `Requires`。简单的 `%ifarch`、`%ifnarch`、逗号或空格分隔的架构列表及 `%else` 会针对目标架构判断。
+
+工具不会执行 RPM 宏或完整展开 spec。宏形式依赖及普通 `%if` 等无法安全判断的条件会报告为 `unknown`，并以非零状态退出。
+
+
+
+`repo-query` 读取仓库的 RPM-MD `primary` 包清单（不是逐个下载 RPM），只查询完整 package capability，并只考虑目标架构和 `noarch` 二进制包。当前支持 XML 和 gzip 格式的包清单，其他格式会明确报错。压缩 checksum/大小为必需项；仓库若提供 `open-checksum`、`open-size` 就会校验，缺少时仍限制解压大小并在报告中说明。

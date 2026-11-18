@@ -1,8 +1,60 @@
-# repo-query command
+# `repo-query` command
 
-`repo-query` diagnoses the Go RPM capabilities available in an explicitly selected RPM repository. It does not use the host RPM database, modify a spec, select modules, or solve the complete dependency graph.
+`repo-query` answers a specific question: **Does an RPM in the specified distribution, repository and architecture provide this Go package import path?** A Provider is the RPM package that provides the requested Go package capability.
 
-## Usage
+## The simplest query
+
+Specify the distribution, repository URL, architecture and the full Go package capability to check:
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  'go(aead.dev/mem)'
+```
+
+`go(aead.dev/mem)` is a capability. It represents a Go package import path provided by an RPM.
+
+You can query several capabilities at once:
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --format text \
+  'go(aead.dev/mem)' \
+  'go(golang.org/x/sys/unix)'
+```
+
+`--repository` can be an HTTPS repository root URL. You can also specify a repository name and pass its URL separately:
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository openruyi-x86_64 \
+  --repository-url https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  'go(aead.dev/mem)'
+```
+
+`--distro`, `--repository` and `--arch` must all be specified. The command does not use the development machine's rpmdb as a substitute for the target repository.
+
+## Check dependencies from a generated spec
+
+`--spec` reads the literal Go `BuildRequires` (packages needed to build) and `Requires` (packages needed after installation) from the spec, then queries them for the architecture you specify:
+
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --spec go-example-sdk/go-example-sdk.spec \
+  --format text
+```
+
+You can also provide an explicit RPM version requirement:
 
 ```bash
 go2spec repo-query \
@@ -13,37 +65,38 @@ go2spec repo-query \
   --format text
 ```
 
-`--repository` accepts either a repository identity or an HTTPS repository base URL. When it is an identity, pass `--repository-url` separately. `--distro`, `--arch`, and the repository are always explicit; the command never falls back to the development machine's rpmdb.
+Here `0:0.2.0` is an RPM EVR: `0` is the Epoch and `0.2.0` is the Version. The tool compares RPM Provide versions only when you explicitly provide `--require`. A Go Module version cannot be used directly as an RPM version.
 
-To inspect dependencies from a generated spec, use `--spec`:
+## Read the results
 
-```bash
-go2spec repo-query \
-  --distro openruyi \
-  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
-  --arch x86_64 \
-  --spec go-example-sdk/go-example-sdk.spec \
-  --format json
+Common statuses are:
+
+| Status | Meaning for users |
+|---|---|
+| `satisfied` | An exact Provider was found and meets the RPM version requirement you specified. |
+| `present-no-version-requirement` | A Provider was found, but you did not request an RPM version comparison; this only means “present.” |
+| `version-insufficient` | There is one Provider, but it does not meet the explicit RPM version requirement. |
+| `missing` | No exact capability was found among packages for the selected architecture or `noarch`. |
+| `multiple-providers` | Multiple Providers were found. The tool does not choose one; JSON `provider_checks` lists the version result for each. |
+| `unknown` | The tool cannot safely decide—for example, version data is incomplete, the RPM comparator is unavailable, or a spec condition/macro cannot be parsed. Check the report's `reason`. |
+
+Example text output:
+
+```text
+Repository: openruyi/x86_64 (openruyi)
+Base URL: https://repo.build.openruyi.cn/openruyi/x86_64/
+Architecture: x86_64
+
+[present-no-version-requirement] explicit: go(aead.dev/mem)
+  reason: an exact provider exists, but no RPM EVR requirement was supplied
+  provider: go-aead-dev-mem.noarch EVR=0.2.0-3.28.or provide=0.2.0 ...
 ```
 
-Additional inputs are repeatable:
+This output is illustrative; the actual Provider and version depend on the repository snapshot you query. **`present-no-version-requirement` does not confirm version compatibility.** `missing` means only that no matching capability was found in the selected repository snapshot and architecture; it does not mean the upstream Go Module does not exist.
 
-- `go(import/path)` positional arguments query exact capabilities.
-- `--require 'go(import/path)>=epoch:version-release'` supplies an explicit RPM EVR requirement.
-- `--module-require module/path@canonical-version` records Go Module provenance. Go Module versions are **not** automatically compared with RPM EVRs; conflicting versions for the same Module path are reported instead of choosing one by input order.
-- `--format text|json` selects the stable human-readable or machine-readable report.
+## Optional: verify the repository signature
 
-## Spec dependency parsing limits
-
-With `--spec`, go2spec reads literal `BuildRequires` and `Requires` for the requested `--arch`. Simple `%ifarch`, `%ifnarch`, and their `%else` branches are evaluated against that target architecture; the host architecture is not substituted. This bounded parser does not execute RPM macros. Macro-expanded dependency values and conditions it cannot safely evaluate, such as ordinary `%if` or `%elif`, are retained as `unknown` diagnostics and cause a non-zero exit rather than being silently ignored or applied to the wrong architecture. Specs requiring full RPM macro expansion should first be evaluated in the target RPM environment, then queried using explicit literal requirements.
-
-RPM EVR inputs are validated for a decimal Epoch and supported Version/Release characters. Malformed requirements are errors. Repository-provided EVRs receive the same validation before comparison; an invalid or incomparable value cannot be reported as satisfied.
-
-## Repository trust and metadata
-
-The command downloads `repomd.xml`. The primary compressed checksum and size are required and verified. `open-checksum` and `open-size` are optional: each is verified when supplied; when absent, decompression remains size-bounded and the report marks the open checksum as `not-provided`. Reports show the declared checksum algorithms and compressed/open sizes. The command accepts XML and gzip-compressed XML primary metadata. Unsupported compression, malformed XML, missing records, unsafe locations, checksum mismatches, truncated responses, and excessive sizes are errors—not an empty repository.
-
-Use a trusted local keyring when the distribution publishes a repomd signature:
+If the distribution signs its repository metadata, provide a local keyring that you already trust and require signature verification:
 
 ```bash
 go2spec repo-query \
@@ -52,26 +105,37 @@ go2spec repo-query \
   --arch x86_64 \
   --gpg-keyring /usr/share/pki/rpm-gpg/RPM-GPG-KEY-openruyi-obs \
   --require-signature \
-  --require 'go(aead.dev/mem)>=0:0.2.0'
+  'go(aead.dev/mem)'
 ```
 
-The keyring must already be trusted by the maintainer and usable by `gpgv`; go2spec never downloads or trusts a remote key automatically. Without `--require-signature`, the report says `signature-not-requested` rather than claiming repository authenticity. The report includes the distro, repository, architecture, repomd revision/hash, primary checksum/size and signature state so a snapshot can be reproduced.
+The keyring should come from a distribution source you trust; go2spec does not download or automatically trust remote keys. Without `--require-signature`, the result says `signature-not-requested`; you must not treat that as proof that the repository origin was authenticated.
 
-## Result states
+## Output format and reproducibility
 
-Each exact `go(import/path)` requirement produces one of:
+- The default `--format text` is intended for people; use `--format json` for scripts.
+- The report records the distribution, repository URL, architecture, repomd revision/hash, primary metadata checksums/sizes and signature state.
+- JSON dependencies and Providers have stable ordering, so results for the same inputs can be compared.
 
-- `satisfied`: an exact provider satisfies the explicit RPM EVR requirement;
-- `present-no-version-requirement`: one exact provider exists, but no RPM version requirement was supplied;
-- `version-insufficient`: there is one exact provider, but it does not satisfy the explicit RPM EVR requirement; multiple providers are not collapsed into this state;
-- `missing`: no exact provider exists for the selected architecture or `noarch`;
-- `multiple-providers`: more than one exact provider exists; this status takes precedence regardless of their version comparisons, and `provider_checks` reports each comparison without selecting a provider;
-- `unknown`: the provider has no comparable EVR, the RPM comparator is unavailable, the input/condition/macro cannot be safely resolved, or version semantics are incomparable.
+## Optional: record the source Go Module version
 
-A Go Module requirement is reported as provenance and does not turn a provider into `satisfied`; Go Module and RPM version spaces have different semantics. Query failures return a non-zero exit status and are not converted into `missing` or `satisfied`.
+`--module-require` associates the source Go Module version with a package query. It does not convert the Go version to an RPM version. Use it together with a capability or version query:
 
-The parser matches the full package capability, not a module-root prefix. For example, `go(example.org/sdk/submarine)` does not satisfy `go(example.org/sdk/sub)`. Binary packages matching the target architecture and `noarch` are considered; source packages and other architectures are ignored.
+```bash
+go2spec repo-query \
+  --distro openruyi \
+  --repository https://repo.build.openruyi.cn/openruyi/x86_64/ \
+  --arch x86_64 \
+  --require 'go(example.org/sdk/sub)' \
+  --module-require example.org/sdk@v1.2.3 \
+  --format json
+```
 
-## Reproducibility and scope
+If you specify different versions for the same Module path, the tool reports a conflict instead of choosing one based on argument order.
 
-The JSON report sorts dependencies by capability, scope, RPM requirement, and Module provenance; providers are sorted by their complete records. Explicit RPM version requirements include per-provider `provider_checks`, and `go_module` uses `path` and `version` keys. The command is diagnostic only: it does not write a spec, create a package, select a newer Module version, or prove API compatibility. Fixed metadata fixtures cover malformed data, checksum/size errors, architecture filtering, duplicate providers, missing providers and incomparable versions. A real openRuyi snapshot is an additional repository-fact check, not a complete dependency-solver result.
+## How `--spec` is parsed
+
+For `--spec`, the command reads literal `BuildRequires` and `Requires` for the specified `--arch`. Simple `%ifarch` and `%ifnarch` conditions—including comma- or whitespace-separated architecture lists—and `%else` branches are evaluated for the target architecture.
+
+The tool does not execute RPM macros or fully expand a spec. Macro-based dependencies and conditions such as ordinary `%if` that cannot be evaluated safely are reported as `unknown` and cause a non-zero exit.
+
+The command reads the repository's RPM-MD `primary` package listing; it does not download individual RPMs. It looks up full package capabilities and considers only binary packages for the target architecture and `noarch`. Primary package metadata is supported in XML and gzip formats. A compressed checksum and size are required; if the repository provides `open-checksum` or `open-size`, they are verified. Decompression remains size-limited if either field is absent.
